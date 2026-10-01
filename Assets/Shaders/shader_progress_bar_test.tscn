@@ -1,0 +1,74 @@
+[gd_scene format=3 uid="uid://n7vd0sowky56"]
+
+[ext_resource type="Shader" uid="uid://xscx0lbvacff" path="res://Assets/Shaders/progress_bar.gdshader" id="1_aq1q5"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_g4v7s"]
+shader = ExtResource("1_aq1q5")
+shader_parameter/bar_mode = 2
+shader_parameter/fill_mode = 0
+shader_parameter/segment_count = 32
+shader_parameter/discrete_fill_amount = 3
+shader_parameter/fade_fill_amount = 1.0
+shader_parameter/pour_fill_amount = 1.0
+shader_parameter/animation_speed = 1.0
+shader_parameter/flash_type = 1
+shader_parameter/flash_segment = 0
+shader_parameter/flash_intensity = 0.0
+shader_parameter/single_segment_previous_fill = 1.0
+shader_parameter/single_segment_current_fill = 1.0
+shader_parameter/single_segment_flash_intensity = 0.8
+shader_parameter/flash_from_segment = 0
+shader_parameter/flash_to_segment = 0
+shader_parameter/single_segment_fade_from = 1.0
+shader_parameter/single_segment_fade_to = 1.0
+shader_parameter/single_segment_fade_progress = 0.0
+shader_parameter/drain_previous_fill = 1.0
+shader_parameter/drain_current_fill = 1.0
+shader_parameter/drain_time_progress = 0.0
+shader_parameter/background_color = Color(0.1, 0.1, 0.1, 1)
+shader_parameter/filled_color = Color(1, 0.85, 0, 1)
+shader_parameter/border_color = Color(0, 0, 0, 1)
+shader_parameter/flash_color = Color(1, 1, 1, 1)
+shader_parameter/drain_flash_color = Color(1, 1, 1, 1)
+shader_parameter/custom_frame = false
+shader_parameter/frame_trim = 0.0
+shader_parameter/alpha_threshold = 0.69
+shader_parameter/scan_steps = 15
+shader_parameter/edge_smoothness = 0.02
+shader_parameter/mask_expansion = 0.0
+shader_parameter/frame_edge_opacity = 0.9
+shader_parameter/fluid_base_color = Color(0.2, 0.6, 1, 1)
+shader_parameter/fluid_highlight_color = Color(0.8, 0.9, 1, 1)
+shader_parameter/fluid_shadow_color = Color(0.1, 0.3, 0.6, 1)
+shader_parameter/fluid_flow_speed = 1.5
+shader_parameter/fluid_turbulence = 1.0
+shader_parameter/fluid_noise_scale = 6.0
+shader_parameter/gas_mode = false
+shader_parameter/gas_intensity = 0.8
+shader_parameter/effect_mode = 0
+shader_parameter/effect_strength = 0.3
+shader_parameter/effect_speed = 1.5
+shader_parameter/wave_thickness = 0.1
+shader_parameter/bubbles_aspect_ratio = 1.0
+shader_parameter/vertical_gradient = true
+shader_parameter/V_gradient_strength = 0.6
+shader_parameter/horizontal_gradient = false
+shader_parameter/H_gradient_strength = 0.75
+shader_parameter/segment_gap = 0.0
+shader_parameter/universal_border_size = 0.1
+shader_parameter/horizontal_border_size = 0.885
+shader_parameter/inner_border_thickness_multiplier = 2.435
+shader_parameter/outer_border_size = 2.805
+shader_parameter/slant_amount = 0.0
+shader_parameter/scale = 0.0
+shader_parameter/x_offset = 0.0
+shader_parameter/slant_clip_margin = 0.0
+
+[node name="ShaderProgressBarTest" type="Node" unique_id=1537504147]
+
+[node name="ProgressBarShader" type="ColorRect" parent="." unique_id=533613443]
+material = SubResource("ShaderMaterial_g4v7s")
+offset_left = 853.0
+offset_top = 495.0
+offset_right = 1025.0
+offset_bottom = 535.0

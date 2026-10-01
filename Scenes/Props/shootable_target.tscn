@@ -1,0 +1,10 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://Scripts/Props/shootable_target.gd" id="1_target"]
+[ext_resource type="PackedScene" uid="uid://cn7hughmdmy0a" path="res://Assets/Models/Weapons/Models/GLB format/target-large.glb" id="2_model"]
+
+[node name="ShootableTarget" type="StaticBody3D"]
+script = ExtResource("1_target")
+
+[node name="Model" parent="." instance=ExtResource("2_model")]
+transform = Transform3D(0, 0, 3, 0, 3, 0, -3, 0, 0, 0, 0, 0)

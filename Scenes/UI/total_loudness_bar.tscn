@@ -1,0 +1,52 @@
+[gd_scene format=3 uid="uid://bij3k3262vypm"]
+
+[ext_resource type="Script" uid="uid://dkt2dwrx8s2a1" path="res://Scripts/UI/total_loudness_bar.gd" id="1_f3tvf"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_g4v7s"]
+bg_color = Color(0.07450981, 0.078431375, 0.09019608, 0.8784314)
+skew = Vector2(1.2, 0)
+corner_radius_top_left = 2
+corner_radius_top_right = 2
+corner_radius_bottom_right = 2
+corner_radius_bottom_left = 2
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_yf5fn"]
+bg_color = Color(0.9, 0.92, 0.95, 1)
+skew = Vector2(1.2, 0)
+corner_radius_top_left = 2
+corner_radius_top_right = 2
+corner_radius_bottom_right = 2
+corner_radius_bottom_left = 2
+
+[node name="TotalLoudnessBar" type="Control" unique_id=873872469]
+custom_minimum_size = Vector2(320, 18)
+layout_mode = 3
+anchors_preset = 0
+offset_right = 320.0
+offset_bottom = 18.0
+mouse_filter = 2
+script = ExtResource("1_f3tvf")
+visual_smooth_speed = 10.0
+visual_min_units_per_second = 4.0
+visual_snap_threshold = 0.01
+
+[node name="TotalLoudnessProgressBar" type="ProgressBar" parent="." unique_id=1925558722]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_styles/background = SubResource("StyleBoxFlat_g4v7s")
+theme_override_styles/fill = SubResource("StyleBoxFlat_yf5fn")
+show_percentage = false
+
+[node name="Label" type="Label" parent="." unique_id=1304926314]
+layout_mode = 0
+offset_left = 100.0
+offset_top = -4.0
+offset_right = 220.0
+offset_bottom = 19.0
+theme_override_constants/outline_size = 2
+text = "Total Loudness"

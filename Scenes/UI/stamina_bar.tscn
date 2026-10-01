@@ -1,0 +1,50 @@
+[gd_scene format=3 uid="uid://sd70jpaogty1"]
+
+[ext_resource type="Script" uid="uid://wv824fx4c35u" path="res://Scripts/UI/stamina_bar.gd" id="1_7u4pm"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_background"]
+bg_color = Color(0.075, 0.08, 0.09, 0.88)
+skew = Vector2(1.2, 0)
+corner_radius_top_left = 2
+corner_radius_top_right = 2
+corner_radius_bottom_right = 2
+corner_radius_bottom_left = 2
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_fill"]
+bg_color = Color(0.42, 0.78, 0.24, 1)
+skew = Vector2(1.2, 0)
+corner_radius_top_left = 2
+corner_radius_top_right = 2
+corner_radius_bottom_right = 2
+corner_radius_bottom_left = 2
+
+[node name="StaminaBar" type="Control" unique_id=2037365732]
+custom_minimum_size = Vector2(320, 18)
+layout_mode = 3
+anchors_preset = 0
+offset_right = 320.0
+offset_bottom = 18.0
+mouse_filter = 2
+script = ExtResource("1_7u4pm")
+
+[node name="StaminaProgressBar" type="ProgressBar" parent="." unique_id=1963700178]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_styles/background = SubResource("StyleBoxFlat_background")
+theme_override_styles/fill = SubResource("StyleBoxFlat_fill")
+value = 75.57
+show_percentage = false
+
+[node name="Label" type="Label" parent="." unique_id=504495529]
+layout_mode = 0
+offset_left = 130.0
+offset_top = -4.0
+offset_right = 183.0
+offset_bottom = 19.0
+theme_override_constants/outline_size = 2
+text = "Energy"

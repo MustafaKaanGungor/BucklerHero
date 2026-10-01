@@ -1,0 +1,49 @@
+[gd_scene format=3 uid="uid://bcr7vor5xg5b1"]
+
+[ext_resource type="Script" uid="uid://2cq5rv07wy1u" path="res://Scripts/UI/loudness_bar.gd" id="1_eoyig"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_yf5fn"]
+bg_color = Color(0.07450981, 0.078431375, 0.09019608, 0.8784314)
+skew = Vector2(1.2, 0)
+corner_radius_top_left = 2
+corner_radius_top_right = 2
+corner_radius_bottom_right = 2
+corner_radius_bottom_left = 2
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_57qmd"]
+bg_color = Color(1, 1, 1, 1)
+skew = Vector2(1.2, 0)
+corner_radius_top_left = 2
+corner_radius_top_right = 2
+corner_radius_bottom_right = 2
+corner_radius_bottom_left = 2
+
+[node name="LoudnessBar" type="Control" unique_id=1866646059]
+custom_minimum_size = Vector2(320, 18)
+layout_mode = 3
+anchors_preset = 0
+offset_right = 320.0
+offset_bottom = 18.0
+mouse_filter = 2
+script = ExtResource("1_eoyig")
+
+[node name="LoudnessProgressBar" type="ProgressBar" parent="." unique_id=1987263639]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_styles/background = SubResource("StyleBoxFlat_yf5fn")
+theme_override_styles/fill = SubResource("StyleBoxFlat_57qmd")
+show_percentage = false
+
+[node name="Label" type="Label" parent="." unique_id=736579889]
+layout_mode = 0
+offset_left = 123.0
+offset_top = -4.0
+offset_right = 197.0
+offset_bottom = 19.0
+theme_override_constants/outline_size = 2
+text = "Loudness"

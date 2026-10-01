@@ -1,0 +1,41 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://Scripts/Level/level_generator.gd" id="1_generator"]
+[ext_resource type="PackedScene" uid="uid://bsvmubogm6dde" path="res://Scenes/speed_shader.tscn" id="2_speed"]
+[ext_resource type="PackedScene" uid="uid://bnywcm8v741br" path="res://Scenes/UI/ui.tscn" id="3_ui"]
+
+[sub_resource type="Environment" id="Environment_level"]
+background_energy_multiplier = 2.02
+ambient_light_color = Color(0.28118682, 0.28118688, 0.28118682, 1)
+ambient_light_energy = 2.23
+tonemap_mode = 3
+tonemap_exposure = 0.87
+fog_enabled = true
+fog_light_color = Color(0.8373282, 0.72388166, 0.7145866, 1)
+fog_light_energy = 3.2
+fog_sun_scatter = 0.44
+fog_density = 0.0045
+fog_height = -292.57
+fog_height_density = 2.6374
+volumetric_fog_density = 0.138
+adjustment_enabled = true
+adjustment_brightness = 0.87
+adjustment_contrast = 1.25
+adjustment_saturation = 2.0
+
+[node name="GeneratedLevel" type="Node3D"]
+script = ExtResource("1_generator")
+
+[node name="SpeedShader" parent="." instance=ExtResource("2_speed")]
+
+[node name="UI" parent="." instance=ExtResource("3_ui")]
+
+[node name="PlayerSpawn" type="Marker3D" parent="."]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_level")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.819152, -0.469846, 0.32899, 0, 0.573576, 0.819152, -0.573576, -0.67101, 0.469846, 0, 30, 0)
+light_energy = 1.1
+shadow_enabled = true

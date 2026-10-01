@@ -1,0 +1,35 @@
+[gd_scene format=3 uid="uid://bsvmubogm6dde"]
+
+[ext_resource type="Shader" uid="uid://d0iqqxiidphqd" path="res://Assets/Shaders/SpeedEffectShader.gdshader" id="1_speed"]
+[ext_resource type="Script" uid="uid://dfj60wqirlmhl" path="res://Scripts/Feel/SpeedEffectController.gd" id="2_speed"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_speed_effect"]
+shader = ExtResource("1_speed")
+shader_parameter/speed_strength = 0.0
+shader_parameter/center = Vector2(0.5, 0.5)
+shader_parameter/line_color = Color(0.411765, 0.411765, 0.411765, 0.938)
+shader_parameter/line_count = 700.0
+shader_parameter/line_width = 0.3
+shader_parameter/line_scroll_speed = 5.2
+shader_parameter/line_cutoff = 0.2
+shader_parameter/center_radius = 0.28
+shader_parameter/outer_fade_start = 0.5
+shader_parameter/blur_radius = 0.55
+shader_parameter/blur_amount = 5.25
+shader_parameter/blur_inner = 0.58
+shader_parameter/blur_outer = 0.78
+shader_parameter/vignette_strength = 0.22
+shader_parameter/vignette_tint = Vector3(0.72, 0.86, 1)
+
+[node name="SpeedShader" type="CanvasLayer" unique_id=1227282083]
+layer = 80
+script = ExtResource("2_speed")
+
+[node name="SpeedEffectRect" type="ColorRect" parent="." unique_id=1958712931]
+material = SubResource("ShaderMaterial_speed_effect")
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2

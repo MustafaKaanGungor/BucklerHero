@@ -1,0 +1,465 @@
+# CLAUDE.md
+
+Guidance for Claude Code when working in this repository.
+
+## Project
+
+First-person 3D parkour / stealth shooter prototype in **Godot 4.7** (Forward+, D3D12, Jolt Physics, physics interpolation on). The folder is `Oxidised`; the Godot project name is still `FPS3D`. Everything is GDScript — no C#, no GDExtension, no addons, no tests.
+
+- Main scene: `res://Scenes/generated_level.tscn` (procedurally generated corridors and arenas, see Generated levels). `res://Scenes/main.tscn` is the old CSG greybox test level + shooting range, still useful for testing movement and weapons (open it in the editor and press F6).
+- Editor binary (from `.vscode/settings.json`):
+  `C:\Program Files (x86)\Steam\steamapps\common\Godot Engine\godot.windows.opt.tools.64.exe`
+
+### Running / checking
+
+```bash
+GODOT="/c/Program Files (x86)/Steam/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe"
+"$GODOT" --path .                                   # run the game
+"$GODOT" --path . --editor                          # open the editor
+"$GODOT" --path . --headless --check-only --script res://Scripts/player.gd   # parse-check one script
+"$GODOT" --path . --headless --import               # reimport after adding assets / new scripts
+```
+
+There is no automated test suite; verification means parse-checking and playing `main.tscn`.
+
+## Layout
+
+```
+project.godot            autoloads, input map, physics/render settings
+StaminaManager.gd        autoload (lives in the repo root, not Scripts/)
+Scenes/
+  generated_level.tscn   main scene: level generator root (level built at runtime), PlayerSpawn, WorldEnvironment, Sun
+  main.tscn              test level: Ground, TestBlock*/Wall* CSG boxes, ShootingRange, PlayerSpawn
+  player.tscn            Player (CharacterBody3D) > Head > Camera3D > Hands, Pistol
+  speed_shader.tscn      full-screen speed effect CanvasLayer
+  UI/                    ui.tscn (HUD) + stamina / loudness / total-loudness bars
+  Weapons/               pistol, projectile, impact_decal
+  Props/                 shootable_target, physics_crate
+Scripts/
+  player.gd              ~2900 lines: movement state machine + all physics probes
+  head.gd                mouse look (yaw on player, pitch on head), eye height
+  playercamera.gd        camera feel: bob, landing springs, roll, climb/slide/wall-run poses
+  hands.gd               placeholder sphere hands animation
+  main.gd                spawns/places the player at PlayerSpawn
+  LoudnessManger.gd      autoload: momentary loudness meter (note the typo in the name)
+  TotalLoudnessManager.gd  autoload: permanent per-level loudness meter
+  MovementEdgeHelp.gd    autoload: ledge-assist tuning
+  DataScripts/           InputManager, WorldBasicRules, GameManager*, MovementRules*
+  Movement/              Movement{Walk,Run,Jump,Crouch,Slide,WallRun,Climb}.gd
+  Feel/                  {Camera,Hand,Walk,Sprint,Jump,Landing,Crouch,Slide,Stair,WallRun,Climb}Feel.gd, SpeedEffectController.gd
+  Level/                 level_generator (main scene root), level_layout, level_section, level_door, health_pack
+  Audio/                 sound_synth (static synth helpers), player_audio, melee_audio, enemy_audio
+  Weapons/  Props/  UI/  Import/  Enemies/
+Assets/                  Kenney model packs (Characters, Props, Weapons), FBX samples, shaders
+```
+
+`*` = empty stub (`extends Node` only): `GameManager`, `MovementRules`, `PlayerMovementFeel`, and `UiManager` is a no-op. They are registered autoloads reserved for later.
+
+## Architecture
+
+### Autoload singletons hold tuning + pure math; nodes hold state
+
+28 autoloads are registered in `project.godot` (by `uid://`). The pattern is strict:
+
+- **`Movement*` autoloads** — gameplay rules. `@export` tuning values grouped with `@export_group`, plus mostly stateless helper functions that take the current state as arguments and return a velocity / bool / duration (e.g. `MovementWalk.apply_ground_movement(...)`, `MovementWallRun.can_start_wall_run(...)`, `MovementClimb.get_wall_climb_velocity(...)`).
+- **`*Feel` autoloads** — presentation (camera/hand offsets, spring stiffness, feedback strengths). Mostly cosmetic, with existing exceptions that do affect gameplay: `StairFeel` owns all stair-stepping tunables (`stair_max_height`, `stair_min_speed`, speed multiplier/limit on stairs), `LandingFeel.landing_stick_velocity` is the grounded downward velocity, and `CrouchFeel` decides eye height. Put new gameplay rules in `Movement*`, not `*Feel`.
+- **Managers** — `InputManager` (wraps every `Input` call and owns the input action names), `StaminaManager`, `LoudnessManger`, `TotalLoudnessManager`, `WorldBasicRules` (gravity, terminal speed, spawn offset).
+- **`player.gd`** owns all per-player runtime state (`_is_sliding`, `_climb_timer`, …), does the raycasts/shape probes, and calls into the autoloads for numbers and decisions.
+
+When adding a mechanic: put tunables and math in a `Movement<X>.gd` autoload, its presentation in `<X>Feel.gd`, register both in `project.godot`, and keep only state + orchestration in `player.gd`.
+
+**The autoloads are not fully stateless.** A few cache "context" that the player must push before calling their getters:
+
+- `MovementRun.set_combo_speed_bonus()` — via `_sync_movement_run_combo_bonus()`, called before every sprint speed/ramp/limit query.
+- `MovementSlide.set_combo_speed_bonus()`, `set_slide_motion_context()`, `set_landing_drop_slide_multiplier()` / `clear_landing_drop_slide_multiplier()`.
+- `MovementWallRun.set_wall_run_speed_context()` — via `_sync_wall_run_speed_context()`.
+
+If you add a call to one of these autoloads' speed getters, call the matching `_sync_*` first, as the existing code does. This also means the autoloads assume a single player.
+
+The cached context is read outside `player.gd` too: `playercamera.gd` calls `MovementSlide.get_active_slide_ground_strength()` for slide shake, and `MovementClimb` / `ClimbFeel` call `MovementRun.get_sprint_speed_limit()` (which includes the combo bonus).
+
+**Tuning happens in the `.gd` files.** The autoloads are registered as scripts, not scenes, so there is no saved Inspector override: the `@export` default in the script is the live value. To change a tunable, edit the default in the script. (Exports on scene-attached scripts such as `pistol.gd` or `SpeedEffectController.gd` can be overridden in their `.tscn`.)
+
+### Player frame (`player.gd::_physics_process`)
+
+Order matters. Roughly: timers/feedback decay → `InputManager.update_movement_state` → read input and wish direction → slide state → crouch → sprint → climb state → wall-run state → target speed → jump timers → one movement branch → vertical motion → stamina drain → `move_and_slide()` → step-up / edge-help → landing feedback → loudness.
+
+Movement branch priority (exclusive):
+`edge pull-over > edge hold > climb > shield charge > slide (on floor) > wall run > wall-run release > ground > air`
+
+Starting a higher-priority state calls the `_stop_*()` of the others (`_stop_slide`, `_stop_wall_run`, `_stop_climb`, `_stop_edge_hold`). Keep that discipline when adding states.
+
+Edge pull-over and edge hold set `global_position` directly and skip `move_and_slide()` and `_apply_vertical_motion()`; climb skips vertical motion only (its velocity comes from `MovementClimb.get_wall_climb_velocity`).
+
+### `player.gd` map (approximate line ranges)
+
+| Lines | Contents |
+|---|---|
+| 1–225 | state vars, `_ready`, `_physics_process` |
+| 227–445 | public getters and `consume_*()` events |
+| 446–576 | input, target speed, stamina drain, loudness, sprint ramp, ground/air movement |
+| 578–1200 | climb, edge hold, edge pull-over: state, start/stop, wall and ledge raycasts |
+| 1203–1480 | wall run: state, release, wall raycasts and scoring |
+| 1481–1666 | slide: start/stop conditions, start speed, jump-momentum inheritance |
+| 1668–1957 | vertical motion: jump, wall jump, variable jump height, sprint/slide jump boosts |
+| 1959–2147 | jump timers, crouch height, auto-crouch clearance, floor normal, fall height |
+| 2149–2701 | stair step-up, edge help, climb-edge help, `test_move` probes |
+| 2703–2898 | transform sanitize, feedback decay timers, combo speed, landing feedback |
+
+### Movement mechanics as implemented
+
+- **Jump**: jump buffer + coyote time (`MovementJump.jump_buffer_time` / `coyote_time`). Variable height: holding jump lowers gravity for `jump_hold_time`; releasing early cuts upward velocity. Crouch jumps have their own start velocity.
+- **Sprint jump / slide jump boosts**: each costs stamina through `StaminaManager.spend_sprint_jump()` / `spend_slide_jump()`; if the spend fails the jump still happens, just unboosted.
+- **Combo speed**: slide→jump and jump→slide each add to `_combo_speed_bonus` (held for `MovementRun.combo_speed_hold_time`, then decays). It raises sprint, slide and wall-run speeds. A recent jump's horizontal momentum (`_recent_jump_momentum_*`) can be inherited by a slide started within `MovementSlide.slide_jump_momentum_window`; landing refreshes that window.
+- **Landing drop boost**: the fall height (`_airborne_highest_y` minus landing y) is cached briefly and multiplies the start speed of a slide begun right after landing.
+- **Slide**: starts on the floor from sprint + crouch (manual), or from sprint + forced crouch under an obstacle (auto). Ends when airborne, out of stamina, below `slide_stop_to_crouch_speed`, or crouch is released after `slide_min_time`.
+- **Auto crouch**: `_should_force_crouch()` runs capsule shape queries (`_has_body_clearance`) at the current position and ahead along the wish direction; if standing doesn't fit but crouching does, crouch is forced.
+- **Wall run**: side raycasts at two heights, left and right; an existing run prefers its current wall, then its locked side. Ends via a soft "release" phase (`_is_wall_run_releasing`) during which a release jump is still allowed. After a wall jump the same wall is locked out for `same_wall_reattach_lockout`.
+- **Climb**: front raycasts at two heights; starts in the air while jump is held, or from a wall run when looking into a front wall (`from_wall_run`). Timed (`_climb_duration`), with an optional climb jump. At the top, `_try_climb_edge_help()` picks one of: treat a low ledge as a normal step, auto pull-over, or enter edge hold.
+- **Edge hold** (disabled by default, see the reference below): hang on a ledge, shimmy sideways, pull over with forward/jump, drop with back/crouch. **Edge pull-over** interpolates position to the ledge top over `_edge_pull_duration`.
+- **Stairs** (`_try_step_up`) and **edge help** (`_try_edge_help`, `_find_edge_help_landing`): both use the same `test_move` pattern — raise the body, move forward, cast down, validate floor normal and height — then teleport and hide the snap with `_step_view_offset`, which `head.gd` reads and smooths.
+
+### `Movement*` autoload reference
+
+Numbers are the current script defaults (m, m/s, s).
+
+| Script | Owns | Key defaults and behaviour |
+|---|---|---|
+| `MovementWalk` | ground/air velocity integration, slope handling, `CharacterBody3D` floor settings | `walk_speed` 4.7. Quake-style `accelerate()` + `apply_friction()`, then "momentum cleanup" (sideways damping, backward brake, soft overspeed cap that decays rather than clamps). Air control is scaled by jump phase (`get_air_phase_control_multiplier`: takeoff 1.22 → apex 0.2 → fast fall 1.18). Slopes: walkable up to 50°, small uphill penalty / downhill bonus. `accelerate()`, `get_safe_floor_normal()`, `get_input_strength()` are reused by other scripts. |
+| `MovementRun` | sprint ramp, combo speed, sprint-jump boost | Sprint ramps 10.0 → 12.8 at 8.8/s. Combo bonus: +0.75 per slide-jump, +0.55 per jump-slide, max 4.5, held 5 s then decays 3/s. `get_sprint_speed_limit()` = sprint speed + combo bonus and is the reference "max speed" used for ratios across `MovementClimb`, `ClimbFeel`, landing and jump feedback. |
+| `MovementJump` | jump velocity, gravity shaping, takeoff control | `jump_velocity` 8.35, coyote 0.08, buffer 0.10. Gravity = `WorldBasicRules.gravity` (23) × `player_weight` (1.12) × arc multiplier (rise 0.96 / apex 0.82 / fall 1.58) × hold multiplier (0.52 while jump is held, up to 0.13 s). Early release cuts velocity to 56 % (min 2.0). Crouch jump = 55 % velocity. `get_takeoff_control_velocity()` nudges horizontal velocity toward input at takeoff, capped in added speed. `enable_momentum_links` gates all jump↔slide↔sprint momentum sharing. |
+| `MovementCrouch` | body dimensions, auto-crouch probe settings | Standing 1.8, crouching 1.05, radius 0.35, `crouch_speed` 2.4. Only two helpers (`get_target_height`, `get_height_blend`); the probing itself is in `player.gd`. |
+| `MovementSlide` | slide speed curve, steering, slope boost, slide jump, landing-drop boost | Needs ≥ 5.2 to start, base max 11.5, exits at 1.45. Deceleration eases out: 18 % of base early, 275 % late. Downhill slopes accelerate the slide hard (`slope_slide_downhill_acceleration` 100, up to +36.5 over max) and pull its direction downhill; uphill and counter-steering brake it. Slide jump adds forward speed scaled by slide speed (cap 17.2 + bonuses). Landing-drop boost: drops ≥ 1.8 m multiply slide start speed and max speed, up to ×5. |
+| `MovementWallRun` | attach rules, along-wall velocity, vertical arc, wall jump, soft release, wall-run→climb gate | Start needs ≥ 4.2 horizontal speed, input along the wall, not crouching/sliding. Base duration 2.05 s (+ up to 1.65 s from entry speed, sprint ramp, combo). Speed 7.8 base, 12.0 cap (+ entry-speed bonus). Vertical arc: brief upward pull (0.34 s) → float (0.18 s) → curved drop. Pressing away from the wall or losing contact enters soft release. Wall jump: up 7.8, away 6.9, along 8.8, cap 17.2. |
+| `MovementClimb` | climb eligibility, climb velocity curve, wall-run transition, edge pull-over path, edge hold, climb jump | **Jump must be held** to catch a front wall (`require_jump_pressed`), except when converting from a wall run. Base duration 3.5 s; upward speed eases from ~4.95 to −1.1, so a climb that finds no ledge ends by dropping. Faster entry = longer, stronger climb. Pull-over takes 0.38–0.78 s along a hold → lift → settle curve. Climb jump: up 5.65, away 5.4. |
+| `MovementEdgeHelp` | tunables for airborne ledge assist and climb-top ledge assist | Normal edge help lifts ≤ 0.42 m within 0.72 s of leaving the floor. Climb edge help lifts ≤ 1.10 m and searches 0.72 m forward with 6 probe heights. |
+
+Current defaults that change which code paths run:
+
+- `MovementClimb.enable_edge_hold = false` and `auto_pull_over_climb_edges = true`: reaching a ledge while climbing goes straight to pull-over. The whole edge-hold / shimmy path (`_start_edge_hold`, `_apply_edge_hold_movement`, the `edge_hold_*` tunables, `ClimbFeel` edge-hold poses) is implemented but never entered with these defaults.
+- `MovementEdgeHelp.climb_edge_use_smooth_pull_over = true`: the instant-placement branch at the end of `_apply_climb_edge_result()` is not used.
+- A ledge lower than the head height at climb start (`climb_edge_requires_start_head_height`) is treated as a normal step-up, not a pull-over.
+
+### `*Feel` autoload reference
+
+Consumed by `playercamera.gd`, `hands.gd`, `head.gd`, `pistol.gd` (and a few values by `player.gd`).
+
+| Script | Contents |
+|---|---|
+| `CameraFeel` | `mouse_sensitivity`, pitch clamp, look-input smoothing/clamping, turn sway (position, rotation, "turn strafe" lean), FOV (`base_fov` 82, `max_fov` 98, speed bonus), roll amounts, soft clamp for stair eye correction. |
+| `WalkFeel` | head bob amounts/frequency, per-footstep dip/nudge/roll, stop dip. |
+| `SprintFeel` | sprint FOV bonus (15.5), bob amount/frequency, roll multiplier. |
+| `JumpFeel` | `jump_feedback_multiplier` (read by `player.gd`), camera lift and impulses. |
+| `LandingFeel` | `get_impact_strength()` from fall speed; two-stage "first leg / second leg" dip, roll and pitch jolt; spring constants; `landing_stick_velocity` (gameplay). |
+| `CrouchFeel` | eye heights (standing 1.62, crouching 0.95) derived from body height, crouch-walk bob, enter/exit impulses and spring. |
+| `SlideFeel` | slide camera pose, strafe lean, FOV bonus, speed-scaled ground shake. |
+| `StairFeel` | stair stepping gameplay tunables (max step 1.0 m, speed multipliers 0.88 walk / 0.78 sprint) plus step view smoothing and camera feel. |
+| `WallRunFeel` | camera offset, roll (20°) and look-away yaw (40°) toward/away from the wall, virtual strafe, wall-jump kick, wall-run→climb blend handoff. |
+| `ClimbFeel` | feedback strengths, climb camera pose and alternating-hand sway, start kick, edge pull-over camera/hand animation (preload → pull → settle), edge-hold poses. Largest Feel file. |
+| `HandFeel` | data only, no functions: viewmodel placement, sway, bob, per-state offsets, impulse spring, "surface protection" pushback near walls, render settings. Many of its exports lack `##` doc comments. |
+| `SpeedEffectController` | not an autoload — script on `Scenes/speed_shader.tscn`. Drives `speed_strength` on `SpeedEffectShader.gdshader` from player speed (starts at 7.2, full at 35). |
+
+Shared shape of Feel functions: `get_<thing>_position/rotation(blend, progress, ...) -> Vector3` returning an offset already scaled by the state blend; rotations are authored in degrees (`*_degrees` exports) and converted with a local `_degrees_to_radians()`.
+
+### Values overridden at runtime
+
+Don't tune these in `player.tscn`; the script overwrites them:
+
+- `CharacterBody3D` floor settings (`floor_max_angle`, `floor_snap_length`, `floor_stop_on_slope`, `floor_constant_speed`, `floor_block_on_wall`, `safe_margin`) come from `MovementWalk` in `_apply_character_body_physics_settings()`.
+- The capsule's radius/height and the collision shape's y position come from `MovementCrouch` every tick (`_apply_body_dimensions()`).
+- The player forces `top_level = true`, scale `ONE`, and a yaw-only basis (`_sanitize_physics_transform()`), re-checked every physics tick. Rotate the player only around Y; pitch lives on `Head`.
+- `MeshInstance3D` (debug body) is hidden in `_ready`.
+
+### Player → presentation contract
+
+Camera, hands, pistol and the speed shader never reach into player internals. They use:
+
+- **Public getters** on the player: `get_horizontal_speed()`, `get_slide_blend()`, `is_wall_running()`, `get_climb_progress()`, …
+- **`consume_*()` one-shot events**: `consume_landing_impact()`, `consume_jump_feedback()`, `consume_climb_feedback()`, … return the value and zero it. Exactly one consumer (the camera) should call each; other consumers read the `get_recent_*()` variants, which persist for `FEEDBACK_MEMORY_TIME`.
+- **Duck typing**: consumers declare `const METHOD_X: StringName = &"x"` and go through `has_method` / `call`, resolving the player via an exported `NodePath`. If you rename or add a player getter, update the `METHOD_*` constants in `playercamera.gd`, `hands.gd`, `head.gd`, `Weapons/pistol.gd`, and `Feel/SpeedEffectController.gd`. Each consumer has its own copy of `_player_float()` / `_player_bool()` / `_player_vector2()` that returns a fallback when the method is missing, so a typo in a method name fails silently.
+
+### Presentation scripts
+
+Gameplay runs in `_physics_process` (player, pistol firing/reload, stamina, loudness decay). Presentation runs in `_process` (head, camera, hands, pistol viewmodel motion, HUD, total-loudness fill). Physics interpolation is on, and `Camera3D` has `physics_interpolation_mode = 1`.
+
+- **`head.gd`** (`Head`): accumulates mouse motion in `_unhandled_input`, applies it in `_process` with optional smoothing. Yaw is written to `player.rotation.y`, pitch to the head's own `rotation.x`. Owns eye height (`position.y`). Exposes `get_yaw()`, `get_pitch()`, `get_look_motion()` (smoothed pixels, decays to zero). A mouse click re-captures the cursor; `ui_cancel` releases it.
+- **`playercamera.gd`** (`Head/Camera3D`): the only caller of the player's `consume_*()` events. Its local `position` / `rotation` are pure feel offsets on top of the head. Per frame: read look motion → consume events → vertical spring → landing springs (two-stage, second leg fires after a delay on the opposite side) → crouch spring → directional feel (turn sway, slide, wall run, climb, edge poses) → bob → roll → FOV. Public method `add_recoil_impulse(position, rotation)` is what weapons call; it reuses the crouch spring. `add_screen_shake(amount)` (0-1, adds up, clamped) drives a `FastNoiseLite` jitter tuned in `CameraFeel`'s Screen Shake group (max offset/rotation, frequency, decay 1.5/s, strength curve). The shake is applied after everything else each frame and subtracted at the start of the next, so the smoothed feel offsets never absorb it. Used by shield-charge impacts: crush (`shield_crush_screen_shake`, 0.85, at the moment of impact) wall / heavy-enemy impacts (`shield_impact_screen_shake`, 0.6), and melee hits via `MeleeAttackData.hit_screen_shake` on hits against something with `on_melee_hit`, following the same rule as hit-stop (`hit_stop_every_hit`): sword 0.3 on every enemy hit (shakes add up, clamped at 1), halberd 0.45 and shield bash 0.5 once per attack. Player damage also shakes: `HealthManager.damage_screen_shake` (0.55) × `get_camera_kick_strength(amount)` (full at 15 damage), and a blocked hit gets `block_camera_kick_multiplier` (0.35) of that.
+- **`hands.gd`** (`Head/Camera3D/Hands`): positions the root and the two placeholder sphere hands from `HandFeel` / `ClimbFeel`. Reads only `get_recent_*()` values, never `consume_*()`. Raycasts from the camera to pull the hands back near surfaces ("surface pushback"). On `_ready` it duplicates each mesh material with `no_depth_test` and a high render priority so hands draw over the world.
+- **`pistol.gd`** viewmodel motion is self-contained: its tunables are exports on the pistol node, not in a `*Feel` autoload.
+
+Shared spring idiom used for every impulse (camera, hands, pistol recoil, target wobble):
+
+```gdscript
+velocity += -offset * stiffness * delta
+velocity *= exp(-damping * delta)
+offset += velocity * delta
+```
+
+An impulse is applied by adding to `offset` (a kick) or `velocity` (a push).
+
+### Stamina and loudness
+
+- `StaminaManager`: `can_<action>()` gates, `drain_<action>(delta)` for continuous actions (sprint < slide < wall run < climb), `spend_*()` for one-shot costs. Hitting zero sets an exhaustion lock until `exhausted_recovery_stamina` is regained. Emits `stamina_changed` / `stamina_depleted`.
+- `LoudnessManger`: the momentary meter (0–100). Displayed value is `max(movement loudness, event loudness)`.
+  - Movement loudness: `player._update_loudness()` calls `update_player_movement()` every physics tick; the manager picks one state (`climb > wall_run > slide > sprint > crouch > walk`, none while airborne) and steps toward that state's loudness (sprint 68, climb 46, wall run 40, slide 32, walk 18, crouch 5). If the player stops calling it, movement loudness decays on its own.
+  - Events: `register_jump()`, `register_landing()`, `register_sound(amount)` (gunshot 60, reload 8), or the generic `push_loudness()`. Jumps are quiet (5–8); landings carry the noise, scaled by drop height.
+  - A combo multiplier (up to ×1.85) builds when movement states change or jumps/landings chain within 1.15 s. Randomness only ever lowers a value.
+  - States `quiet` (≤ 25 %) / `noisy` (≤ 65 %) / `loud`. Emits `loudness_changed`.
+- `TotalLoudnessManager`: permanent per-level meter (0–100), fed only by `LoudnessManger`. Gains are queued and released smoothly in `_process`. Walking and crouching never add to it; landings only count above 25 loudness; sprint/slide/wall run/climb add slowly; generic sounds (gunshots) add the most. It never decreases except via `reset_total_loudness()`. Emits `total_loudness_changed(..., is_full)`. Nothing reacts to `is_full` yet — no detection or fail state exists.
+- The movement-state names in `LoudnessManger` (`MOVEMENT_*`) are passed straight through as source names and must match `TotalLoudnessManager.SOURCE_*` string-for-string.
+- Neither manager resets on scene reload (they are autoloads); call `reset_stamina()`, `reset_loudness()`, `reset_total_loudness()`, `InputManager.reset_movement_state()` when adding restart/level-change logic.
+
+### HUD
+
+`Scenes/UI/ui.tscn` is a `CanvasLayer` (layer 120) instanced in `main.tscn`; `speed_shader.tscn` is layer 80. `ui.gd` only caches bar references.
+
+- `stamina_bar.gd`, `loudness_bar.gd`, `total_loudness_bar.gd` each connect to their manager's signal **and** re-read the manager every `_process`, then recolor the `ProgressBar` fill `StyleBoxFlat`. `total_loudness_bar` adds its own visual smoothing.
+- `crosshair.gd` draws itself in `_draw()` at the control's center.
+- `ammo_counter.gd` looks up the weapon via group `player_weapons` (the player is spawned after the HUD is ready) and connects to `ammo_changed`.
+- `stamina_bar.gd` recolors the theme stylebox in place, while the two loudness bars duplicate it first; copy the loudness-bar pattern for new bars.
+
+### Weapons and hits
+
+- `pistol.gd` sits under `Head/Camera3D` and joins group `player_weapons`. Semi-automatic: 12-round magazine, unlimited reserve, 1.2 s reload (R, or automatically on an empty trigger pull), 0.14 s between shots, clicks buffered for 0.12 s. Public API: `get_ammo()`, `get_magazine_size()`, `is_reloading()`, `get_reload_progress()`, `start_reload()`; signals `fired`, `ammo_changed`.
+  - Firing is blocked while climbing, edge holding, or pulling over. The click that re-captures the mouse does not fire.
+  - Aim: raycast from the camera through screen center, then launch from the muzzle toward the hit point. If the muzzle is inside a wall or the target is closer than 1.2 m, the bullet starts at the camera instead.
+  - The projectile is added to `get_tree().current_scene` and configured with `set(&"speed" / &"damage" / &"physics_impulse")` then `launch(from, direction, exclude)`.
+  - Each shot kicks the gun, calls the camera's `add_recoil_impulse()`, flashes the muzzle, and registers 60 loudness.
+- **The pistol is currently removed from the player.** `pistol.tscn`, `pistol.gd`, the projectile, decal and ammo counter are kept for later, but `player.tscn` no longer instances the pistol, so nothing shoots and the ammo counter stays blank. Everything in this section about the pistol describes that dormant code. To bring it back, instance `Scenes/Weapons/pistol.tscn` as `Head/Camera3D/Pistol`.
+- `pistol.gd` also has `set_holstered(bool)` / `is_holstered()`: holstered hides it and blocks firing and reloading (a reload in progress pauses).
+- `melee_weapons.gd` (`Scenes/Weapons/melee_weapons.tscn`, node `Head/Camera3D/MeleeWeapons`, group `player_melee`) holds the three melee weapons as children `Broadsword`, `Halberd`, `Shield`. Exactly one weapon is always out: the player spawns holding `starting_weapon` (broadsword), and equipping another hides the rest (and holsters the pistol if one exists at `pistol_path`). Pressing the key of the weapon already out does nothing — `equip()` returns `false` without replaying the animation. There is no unequip and no empty-hands state.
+  - API: `equip(weapon_id)`, `get_equipped_weapon()`, `has_weapon_equipped()`, `is_equipping()`, `get_equip_progress()`; signal `weapon_changed(weapon_id)`; ids `WEAPON_NONE` / `WEAPON_BROADSWORD` / `WEAPON_HALBERD` / `WEAPON_SHIELD`.
+  - Each weapon's idle pose is that child node's transform in the scene (tune it in the editor). Equipping eases from a lowered pose (`equip_start_position`, `equip_start_rotation_degrees`) into the idle pose over `equip_time`.
+  - Models: sword and shield are Kenney Props `weapon-sword.glb` / `weapon-shield.glb` (the sword is stretched non-uniformly into a longer blade); the halberd is built from grey `BoxMesh` pieces.
+  - No blocking, sway or bob yet, and the placeholder hands do not grip the weapons.
+- **Melee attacks** (left click, action `attack`): `attack()` starts the equipped weapon's attack; clicks are buffered for `attack_input_buffer`. One attack at a time, not while equipping, climbing or on a ledge; switching weapons cancels it. Extra API: `can_attack()`, `is_attacking()`, `get_attack_progress()`; signals `attack_started`, `attack_hit(weapon_id, hit_info)`, `attack_finished`.
+  - **Combo rule (core design):** every attack has a 1 s recover, and a weapon can't attack again until its recover is over — so repeating one weapon is slow (about 1.3 s per attack). Attacking with a *different* weapon than the previous attack resets the recover of all other weapons to zero, so alternating two or more weapons is fast. Per-weapon timers live in `_recover_timers` and keep counting while another weapon is out; merely switching weapons resets nothing, only an attack (or starting a shield charge) with a different weapon does, via `_register_weapon_use()`. The timer is set for the whole attack when it starts, so cancelling an attack by switching doesn't skip it. API: `get_recover_remaining(weapon_id)`, `is_recovering(weapon_id)`, `get_last_attack_weapon()`, signal `recover_reset`. A weapon that is brought back out while still recovering shows the rest of its recover animation (`_get_visual_recover_progress()` maps the remaining timer onto attack progress, clamped to the recover part). There is no HUD for it. `equip_time` is 0.18 s so switching doesn't eat the combo.
+  - Viewmodel pose is composed in one place, `_apply_weapon_pose()`: idle transform + attack / recover / shield-brace offset (`_pose_position`, `_pose_rotation`) + the lowered equip offset while rising. Add new poses there rather than writing `weapon.transform` elsewhere.
+  - Each weapon has a `MeleeAttackData` resource (`Scripts/Weapons/melee_attack_data.gd`, the project's only `class_name`), stored as sub-resources in `melee_weapons.tscn` — tune attacks there. It holds timing in seconds (`windup_time`, `strike_time`, `recover_time`), hit area, damage/impulse/dash/loudness, and the windup and strike viewmodel poses.
+  - Phases: windup → strike → recover. Hits only land during the strike. The timer ticks in `_physics_process`; the pose is drawn in `_process`.
+  - Broadsword: `ARC`, 150° fan, 2.7 m reach, hits land right-to-left as the swing passes each target. Halberd: `BOX` 0.55 × 0.55 × 4.2 m, damage 2, and `dash_distance` 1.3 over `dash_duration` 0.2 s carries the player forward through `player.start_dash()`. Shield: `BOX` 0.3 × 0.3 × 1.5 m, strongest push.
+  - Hit detection is **raycasts, not shape queries**: a fan of rays for `ARC`, a grid of parallel rays for `BOX`, all from the camera. Rays pass through hittable objects (up to `max_pierce_per_ray`) and stop at anything else, so attacks don't go through walls. Shape queries (`intersect_shape`) were tried and silently missed the thin trimesh targets under Jolt — don't go back to them.
+  - Hittable = implements `on_melee_hit(hit_info)` or is a `RigidBody3D` (pushed). `hit_info` keys: `position`, `normal`, `direction`, `collider`, `damage`, `weapon`, `attacker`. `shootable_target.gd` implements it (shared `_take_hit()` with `on_projectile_hit`).
+  - Attacks cost no stamina. A swing adds 6 loudness, a swing that hits adds 22 more.
+  - **Hit-stop** (`MeleeAttackData.hit_stop_time`, `hit_stop_every_hit`): when a hit lands on something with `on_melee_hit`, the enemy freezes (`apply_hit_stop(duration)` on the dummy base: `_physics_process` returns early, so its knockback starts after the freeze) and the swing freezes (`_hit_stop_timer` pauses `_update_attack`, which also pauses the sweep and hit rays, and the visual pose). Sword: 0.1 s, `hit_stop_every_hit` on, so a sweep through 3 enemies freezes 3 times in right-to-left order. Halberd 0.16 s and shield bash 0.15 s freeze the swing once per attack (every enemy hit still freezes). The frozen time is added to the weapon's recover timer. A swing freeze also holds a running dash still (`player.pause_dash(duration)`), so the halberd lunge stops on impact and then finishes its distance. Shield-charge knock-aways, crates and normal player movement are not frozen.
+  - **Crush hit-stop** (`shield_crush_hit_stop_time`, 0.2 s): crushed enemies get `hit_stop_time` in their `on_shield_crush` hit info, so they flash and stay pinned to the wall (`_is_crush_pending`) and only break when the freeze ends; the braced shield pose holds still; the player's kickback is delayed until the freeze ends (`_pending_impact_timer` → `_play_shield_impact`). The camera kick, screen shake (`shield_crush_screen_shake`, 0.85) and loudness happen immediately. API: `melee_weapons.is_in_hit_stop()`, enemy `is_in_hit_stop()`.
+- **Shield charge** (hold left click with the shield): the shield decides click vs hold — released before `shield_hold_time` (0.2 s) it is the bash, held longer it starts a charge. So the bash now starts on release, not on press. Other weapons still attack on press.
+  - Split: `melee_weapons.gd` asks for the charge (`player.start_shield_charge()` / `release_shield_charge()`), holds the braced pose (`shield_brace_*` exports) and knocks things away; the movement is a player state with tunables in the `MovementShieldCharge` autoload (`Scripts/Movement/MovementShieldCharge.gd`, registered by path).
+  - Player state `_is_shield_charging` (+ `_is_shield_charge_braking`), movement branch sits right after climb and before slide. The player runs forward on its own along `_shield_charge_heading` at `_shield_charge_speed`; WASD, sprint and crouch are ignored. The heading turns toward the look direction at a limited rate (150°/s slow → 75°/s at the 11.5 top speed), which is the car-like steering. While charging `_wish_direction` is set to the heading so stairs, edge help and auto-crouch probes keep working.
+  - Release: brakes at 13 m/s² until 5 m/s, then the state ends and normal ground movement takes over. Braking still steers.
+  - Ends early when: stamina runs out (14/s via `StaminaManager.drain_shield_charge`, then it brakes), a low ceiling forces a crouch, or a climb, wall run, edge hold or pull-over starts. Running into something drops the speed to the real forward speed + `blocked_speed_slack`. Jumping is allowed.
+  - `player.is_sprinting()` and `get_sprint_ramp_blend()` also report the charge, so camera FOV/bob and hands reuse the sprint feel; internal logic uses `_is_sprinting`, which stays false. Loudness treats the charge as sprinting.
+  - Charge hits use the `shield_charge_attack` resource: a `BOX` lowered with `box_offset` to cover the body, oriented by player yaw (not camera pitch), impulse 45, same object at most every `shield_charge_rehit_interval`, only above `shield_charge_min_hit_speed`.
+  - **Carry and crush** (`Shield Carry` exports on `melee_weapons.gd`): a charge ray that finds an object with `start_shield_carry` picks it up instead of hitting it (no damage). Up to `shield_carry_max` (3) are held side by side `shield_carry_distance` in front of the player; the weapon sets their `global_position` every physics tick, moving them faster than the charge so they never lag into the player (lagging overlaps the player capsule, which triggers forced crouch and kills the charge).
+    - Wall crush: two rays from the player at `shield_crush_ray_heights` along the charge heading; if both hit a non-hittable, near-vertical surface within `shield_crush_wall_distance` while the charge is at least `shield_crush_min_speed`, every carried enemy gets `on_shield_crush()` (dies regardless of health) and the charge stops dead via `player.stop_shield_charge()`. Two heights are required so stairs and low ledges don't count as walls.
+    - Full shield: running into another carriable enemy with 3 already held stops the charge dead, damages nobody, and releases the carried ones.
+    - Heavy enemies: an enemy with `blocks_shield_charge = true` (dummy base export; set on `brute_enemy` and `mortar_enemy`) is never picked up. `is_shield_charge_blocker()` makes the charge stop dead like a full shield (no damage, carried enemies released in front), and additionally calls `on_shield_charge_impact(hit_info)` on the heavy enemy (shoved back `charge_impact_knockback_speed`, hit flash, and in `melee_enemy.gd` a `charge_impact_stagger_time` 1.2 s stagger with the body rocked back `stagger_lean_degrees`) and plays the impact kickback.
+    - **Impact kickback** (`Shield Impact` exports): hitting a heavy enemy, crushing enemies against a wall, or an empty charge reaching a wall within `shield_wall_impact_distance` at ≥ `shield_wall_impact_min_speed` all stop the charge and call `_play_shield_impact(heading)`: the player is thrown back `shield_impact_kickback_distance` (1.4 m) over 0.3 s via `player.start_dash(-heading, …)`, the camera kicks `shield_impact_camera_kick_degrees`, 30 loudness, signal `shield_charge_impact`. A full shield (4th light enemy) stops without kickback.
+    - No wall: when the charge ends any other way (button released and braking finished, stamina, etc.) carried enemies are thrown forward and fanned out with `shield_release_*` speeds. They stay carried through the brake.
+    - Signals: `shield_carry_changed(count)`, `shield_carry_crushed(count)`, `shield_charge_blocked`. `get_carried_enemy_count()`.
+  - **Enemy interface** (duck-typed; `Scripts/Enemies/dummy_enemy.gd` is the reference): `on_melee_hit(hit_info)`, `can_be_shield_carried() -> bool`, `start_shield_carry(carrier)`, `end_shield_carry(release_velocity)`, `on_shield_crush(hit_info)`, `is_shield_carried() -> bool`. While carried an enemy must not move itself and must add a collision exception with the carrier.
+  - `dummy_enemy.tscn` (`CharacterBody3D`, group `enemies`, layer 1): a capsule training dummy with 3 health, knockback, hit flash, and respawn after 4 s. On death it hides and breaks into `fragment_count` (14) box `RigidBody3D` pieces on layer 2 that fly along the killing blow (back off the wall for a crush) and shrink away after 3 s — same approach as `shootable_target.gd`, but with generated boxes instead of fragment models. It has no AI. `main.tscn` has `EnemyRange` with five dummies and a `CrushWall` for testing the crush.
+  - `melee_enemy.tscn` / `Scripts/Enemies/melee_enemy.gd` — the real enemy, used by the arena spawner. The script `extends "res://Scripts/Enemies/dummy_enemy.gd"` (health, knockback, carry, crush and fragments are inherited) and overrides the `_update_horizontal_velocity(delta)` hook, which the base calls each physics tick while alive and not carried. Overridden virtuals must call `super` (`_physics_process`, `on_melee_hit`, `start_shield_carry`, `end_shield_carry` do).
+    - States (`State` enum): `IDLE` → `CHASE` when the player is within `notice_range` (22 m) with line of sight (walls block it, other enemies don't) → `WINDUP` (0.5 s, leans back, turns slowly) once within `attack_range` (1.7 m) → strike → `RECOVER` (0.75 s) → `CHASE`. Gives up beyond `lose_range` (40 m). `STAGGER` after a melee hit (0.4 s) or after being carried/thrown (0.9 s); it cancels a windup.
+    - The strike lands only if the player is still within `attack_hit_range` (2.2 m), within `attack_hit_angle_degrees` of the enemy's facing and at a similar height, so stepping away during the windup avoids it. Damage 10 through `player.take_damage()`.
+    - Movement is a straight line at `move_speed` 4.0 (player walks 4.7) with `move_and_slide`. In a generated level the approach direction comes from the level's grid pathfinding (`_get_approach_direction()` → `get_navigation_direction()` on the first node in group `level_navigation`); without one (e.g. `main.tscn`) it is a straight line and enemies get stuck behind obstacles. Facing, attacks and retreating always use the straight line. `alert()` (`_is_alerted`) makes an enemy chase at once and never drop back to idle from distance or lost sight; level sections alert every enemy they spawn. Enemies push apart via `separation_distance`. They can't climb steps (generated stairs collide as ramps for this reason), but they jump: see Jumping below.
+    - Finds the player through group `player` (added in `player.gd::_ready`).
+    - **Jumping** (`Jumping` exports): while chasing, an enemy that is pushing into something (`is_on_wall()`, moving at it) probes the obstacle (`_probe_obstacle_height`: a forward ray at `max_jump_height + jump_clearance` above the feet must be clear, then a down ray `jump_probe_distance` ahead finds the top; the player and other enemies are ignored / rejected). If the top is between `min_jump_height` (0.3) and `max_jump_height` (2.6 m) it jumps with `v = sqrt(2 g (h + jump_clearance))` and, until just after the apex (`_jump_assist_timer`), keeps its horizontal speed toward the obstacle (`jump_forward_speed_multiplier` × `move_speed`) so it carries over the edge instead of stalling against the side. `jump_cooldown` 0.7 s (counted on the ground). Signal `jumped(obstacle_height)`. With this an enemy gets onto boxes, platforms and raised floors; in tests every melee enemy reached a player standing on a 2.2 m platform. Navigation is still 2D, so enemies walk straight at a raised player and jump the edge rather than using the ramp (unless the ramp is on the way).
+    - It is also the base class for every enemy type. Hooks for subclasses: `_strike()` (the attack itself), `_on_windup_started()`, `_on_windup_cancelled()` (called from `_set_state` when a windup ends without striking — stagger, carry, death), `_get_attack_origin(height, forward)`, `_has_line_of_sight()`. `Positioning` exports make an enemy ranged: with `preferred_min_distance` > 0 it walks in only until within `attack_range * ranged_approach_ratio` with sight, backs away when closer than `preferred_min_distance`, and won't start an attack while backing away unless it has been retreating `max_retreat_time_before_attacking` (cornered). `attack_requires_line_of_sight` gates the windup.
+  - **Enemy types** (all in `Scenes/Enemies/`, all breakable; all carriable/crushable except brute and mortar, which stop a shield charge; scenes generated with the same node layout: `CollisionShape3D`, `Visual` → `Body`, `Visor`, `Weapon`):
+
+    | Scene | Script | Role | Health | Speed | Attack |
+    |---|---|---|---|---|---|
+    | `melee_enemy` (purple) | `melee_enemy.gd` | grunt | 3 | 4.0 | melee 10, windup 0.5 s |
+    | `runner_enemy` (green, small) | `melee_enemy.gd` | fast, fragile | 1 | 7.5 | melee 6, windup 0.3 s, recover 0.5 s |
+    | `brute_enemy` (dark red, big) | `melee_enemy.gd` | slow, tough | 8 | 2.6 | melee 25, windup 0.9 s, reach 2.7 m; barely knocked back or staggered |
+    | `thrower_enemy` (blue) | `thrower_enemy.gd` | projectile thrower | 2 | 3.6 | direct throw 8 at 20 m/s, range 16, keeps ≥ 7 m |
+    | `gunner_enemy` (teal) | `hitscan_enemy.gd` | hitscan | 2 | 3.2 | laser aims 1.1 s, locks for the last 0.3 s, instant shot 12, range 24, keeps ≥ 10 m |
+    | `mortar_enemy` (orange, big) | `thrower_enemy.gd` (`lob_throw`) | slow AoE, tough | 7 | 2.2 | lobbed shell, 1.4 s flight, lands where the player stood, 3 m explosion 22 → 40 % at the edge, range 22, keeps ≥ 9 m |
+
+  - `thrower_enemy.gd`: direct throws aim at the chest with gravity compensation and `aim_spread_degrees`; lob throws solve `v = d / T + ½ g T` so the shell lands exactly on the target's feet after `lob_flight_time`, and call `set_landing_marker()` on the projectile.
+  - `enemy_projectile.gd` / `enemy_projectile.tscn`: raycasts its flight each tick, passes through enemies, direct-hits the player via `take_damage(damage, {direction, source})`, or with `explosion_radius` > 0 explodes on any impact (walls between the blast and the player shelter them), shows an expanding flash, and removes its landing ring. Hit info carries the travel/blast direction but no `attacker`, so the shield blocks based on where the projectile or blast comes from.
+  - `hitscan_enemy.gd`: builds its laser at runtime (top-level unshaded `BoxMesh`); aim follows the player until `aim_lock_time` before firing, then the shot raycasts along the locked line (enemies ignored, level blocks). Dodge by stepping off the line after the lock or breaking line of sight.
+  - The arena spawner mixes them via `enemy_scenes` / `enemy_weights` (grunt 3, runner 2, brute 1, thrower 2, gunner 1.5, mortar 1).
+  - Standalone `--check-only` on enemy scripts reports "Identifier not found: HealthManager / WorldBasicRules" because autoloads aren't loaded in that mode; that's not a real error. Run the project instead.
+- **Audio** — the project has no audio files; every sound is synthesized in code into `AudioStreamWAV`s when its node starts. All are non-positional `AudioStreamPlayer`s.
+  - `Scripts/Audio/sound_synth.gd` (`RefCounted`, static, preload as `SoundSynth`): `whoosh(length, start_hz, peak_hz, end_hz, peak_at, resonance, seed)` (noise through a sweeping resonant band-pass, swell then fade), `thud(length, start_hz, end_hz, body_decay, crack_amount, crack_decay, crack_brightness, seed)` (falling sine body + low-passed noise crack), `growl(length, base_hz, roughness, seed)` (buzzy harmonic tone with flutter and breath), `tone_sweep(length, start_hz, end_hz, rise, vibrato_hz, seed)`, `mix(a, b, gain, delay)`, `normalize(samples, peak)`, `make_wav(samples)` (16-bit mono, 44.1 kHz), and `play_at(context, stream, position, volume_db, pitch, unit_size)`: a self-freeing `AudioStreamPlayer3D` under the current scene, for sounds that must outlive their source. Packed arrays are copied when passed, so always use the return value (`a = mix(a, b)`). The older `health_pack.gd`, `hit_sound.gd` and `block_sound.gd` build their WAVs inline and don't use it.
+  - `Scripts/Audio/melee_audio.gd` — node `Audio` in `melee_weapons.tscn`, driven only by `MeleeWeapons` signals: `attack_started` → `swing_<weapon>` whoosh (sword bright, halberd longer/lower, shield short/low); `attack_hit` → `hit_<weapon>` (sword slash = thud + bright whoosh, halberd heavy stab, shield blunt thump; also every shield-charge knock-away and crate hit); `shield_charge_started` → long low whoosh; `shield_carry_changed` (count went up) → soft thump, slightly higher per extra enemy; `shield_carry_crushed` → crunch (deep slam + two cracks); `shield_charge_impact` and `shield_charge_blocked` → heavy slam. Sound names are `StringName("swing_%s" % weapon_id)`, so weapon ids must match. `play_sound(name, pitch)`. Exports: `swing_volume_db` (−9), `hit_volume_db` (−5), `impact_volume_db` (−2), `pitch_variation` (6 %); every sound is normalized so loudness is only `volume_db`. `max_polyphony` 4 so a sword sweep through several enemies plays every hit.
+  - `Scripts/Audio/player_audio.gd` — node `Audio` in `player.tscn`. Footsteps from distance covered on the floor (not while sliding, climbing or airborne): one step every `walk_stride` 1.8 m at walk speed → `sprint_stride` 2.7 m at 12.8 m/s, `wall_run_stride` 2.4 m along a wall; volume −20 dB walking → −13 dB sprinting, −8 dB more while crouched, −15 dB wall running; four random variants (never the same twice in a row). Moves of more than 3 m in a tick (respawn, level change) are ignored. Jump push-off (thump + whoosh, higher pitch for wall and climb jumps) on the player's `jumped` signal; landing thump on `landed`, silent below `min_landing_speed` (3 m/s), −18 → −3 dB and deeper up to `heavy_landing_speed` (20 m/s).
+  - `Scripts/Audio/enemy_audio.gd` — `Node3D` child `Audio` in every enemy scene, positional (`AudioStreamPlayer3D`, `unit_size` 8). `profile` (enum `DUMMY`, `GRUNT`, `RUNNER`, `BRUTE`, `THROWER`, `GUNNER`, `MORTAR`; set per scene, grunt is the default) picks the voice; banks are synthesized once per profile into a static cache. Windup on `attack_started` (the telegraph: growls for grunt / runner (higher, shorter) / brute (deep, long), a wind-back whoosh for the thrower, a clunk for the mortar, a 1.1 s rising charge hum for the gunner that matches its aim time); strike on `attack_struck` (whooshes for melee and thrower, a deep launch thump for the mortar, a zap for the gunner, which also cuts the hum); `attack_cancelled` stops the windup sound; death on `died` → a shared shatter (low knock + seven cracks), pitched per profile (runner higher and quieter, brute/mortar lower and louder), played through `play_at` because arena enemies free themselves on death. Dummies only have the death sound.
+  - `melee_enemy.gd` signals for this: `attack_struck` (emitted right before `_strike()`, whether or not it lands) and `attack_cancelled` (next to `_on_windup_cancelled()`).
+  - `enemy_projectile.gd`: explosions play a boom (`explosion_volume_db` 4, `unit_size` 12); a non-exploding projectile hitting the level plays a splat (`impact_volume_db` −6); a hit on the player plays nothing here (the player's hit thud / block clang cover it). Both sounds are static, shared, played through `play_at`.
+  - `player.gd` signals for presentation: `jumped(kind, strength)` with kind `&"ground"` / `&"wall"` / `&"climb"` (emitted next to the jump feedback in the jump, wall-jump and climb-jump code), and `landed(fall_speed, impact)` (from `_update_landing_feedback`, every touchdown after being airborne, including tiny drops).
+- **Screen flashes and hit sound** (in `Scenes/UI/ui.tscn`):
+  - `Scripts/UI/screen_flash.gd` (`ColorRect`, full screen, inline vignette shader built in code, hidden while idle): `trigger` picks `HEAL` (`HealthManager.healed`) or `DAMAGE` (`HealthManager.damaged`). Strength = amount / `amount_for_full_flash`, at least `min_strength`, eased out over `fade_time`. Two instances, first in `HudRoot` so the bars draw on top: `HealFlash` (green, full at 35 heal, 0.55 s) and `DamageFlash` (red, full at 25 damage, min 0.35, 0.45 s; overrides saved in `ui.tscn`). `flash(ratio)` can be called directly.
+  - `Scripts/UI/hit_sound.gd` (`AudioStreamPlayer` node `UI/HitSound`): plays a synthesized thud (sine sweep 150 → 55 Hz + short low-passed noise crack, 0.3 s) on `HealthManager.damaged`. Volume −12 → −3 dB and pitch 1.05 → 0.85 scale with damage up to `damage_for_full_volume` (25), ±5 % random pitch.
+  - `Scripts/UI/block_sound.gd` (`AudioStreamPlayer` node `UI/BlockSound`): plays a synthesized metallic clang (five inharmonic partials 523–4912 Hz with separate decays, a tiny downward pitch bend and a noise tick, 0.7 s) on `HealthManager.blocked`. Volume −10 → −2 dB and pitch 1.05 → 0.9 scale with the blocked damage up to `damage_for_full_volume` (25), ±6 % random pitch.
+  - Blocked hits only emit `blocked`, so they get the clang (plus the smaller camera kick and shake) but neither the red flash nor the thud.
+- **Player health**: `HealthManager` autoload (`Scripts/DataScripts/HealthManager.gd`, registered by path) — 100 health, `damage(amount)`, `heal()`, `reset_health()`, `is_dead()`; signals `health_changed`, `damaged`, `died`, `healed(amount)` (actual health gained). No regeneration, armor or invulnerability frames. `player.take_damage(amount, hit_info)` forwards to it, unless the braced shield blocks the hit.
+  - **Shield block**: while a shield charge is held (braced, not braking) `player.is_shield_blocking(hit_info)` stops hits whose attacker is within `MovementShieldCharge.brace_block_angle_degrees` (100°) of the charge heading; hits from behind still land. `take_damage()` then returns `false`, so the enemy's `attack_landed` doesn't fire, and `HealthManager.register_block()` emits `blocked` (smaller camera jolt, 18 loudness). The attacker direction comes from `hit_info["attacker"]`'s position, falling back to `-hit_info["direction"]`; a hit with neither counts as frontal. 
+  - **Passive block**: the shield also blocks just by being the weapon in hand (`enable_equipped_block`), in any state — idle, rising, mid-bash, recovering — covering `equipped_block_angle_degrees` (80°) around where the player faces. The braced charge keeps its wider 100° around the charge heading. The player reads the equipped weapon from `melee_weapons_path` (`Head/Camera3D/MeleeWeapons`) via `get_equipped_weapon()`; `player.gd` has its own `WEAPON_SHIELD` constant that must match the one in `melee_weapons.gd`. `playercamera.gd` flinches on `damaged`. On `died`, `main.gd` instantly puts the player back at `PlayerSpawn` with full health and stamina; enemies are left as they are. HUD: `Scenes/UI/health_bar.tscn` (`health_bar.gd`), top of the bar stack.
+  - Player API: `stop_shield_charge()` (ends at once, zeroes horizontal velocity), `get_shield_charge_heading()`, `start_shield_charge()`, `release_shield_charge()`, `is_shield_charging()`, `is_shield_charge_braking()`, `get_shield_charge_blend()`, `get_shield_charge_speed()`. Weapon: `is_shield_charge_held()`, signals `shield_charge_started` / `shield_charge_released`. `start_dash()` is ignored during a charge.
+- **Dash** (`player.start_dash(direction, distance, duration)`, `is_dashing()`): a fixed-distance lunge. Its velocity is added just before `move_and_slide()` and taken back out right after, so it never becomes momentum: friction, air control and speed caps don't see it, and it covers the same distance on the ground and in the air. Speed falls linearly to zero over the duration. `get_horizontal_speed()` excludes it. A wall cuts it short.
+- `projectile.gd` raycasts its travel segment every physics tick (no tunnelling at 180 m/s), joins group `projectiles`, and exposes `time_scale`, `stop()`, `resume()`, `redirect()` for future abilities. It frees itself on hit or after `lifetime`.
+- On hit, in order: spawn bullet-hole decal → call `on_projectile_hit(hit)` on the collider if it has it → apply impulse if it is a `RigidBody3D` → emit `hit_something`. `hit` keys: `position`, `normal`, `direction`, `collider`, `damage`, `projectile`.
+- `impact_decal.gd`: parented to the hit body so it moves and dies with it; a static list caps live holes at 64 (oldest removed); fades after 20 s. Bodies in group `no_impact_decals` get none.
+- `shootable_target.gd` (`StaticBody3D`): builds its own trimesh collision from the `Model` child at startup, wobbles on hit, breaks into `RigidBody3D` fragments at 0 health, respawns after 3 s. Signals `hit`, `destroyed`, `respawned`. Fragments are on **collision layer 2** (mask 1+2) so they neither block the player nor stop bullets.
+- `physics_crate.gd` (`RigidBody3D`): fits a box shape to its `Model` and deletes any `StaticBody3D` the import script baked into the model. Do the same for any other dynamic prop built from an imported mesh.
+
+### Level geometry
+
+- Everything the player walks/climbs on is on **collision layer 1**; movement raycasts use the player's `collision_mask`, and aiming and bullets use mask 1. Layer 2 is debris (target fragments).
+- Imported level meshes get collision via `Scripts/Import/add_static_collision.gd` (set as Import Script in the Import dock, then Reimport).
+- `main.gd` places the player at the `PlayerSpawn` marker, sets `top_level = true`, and calls `Head.sync_with_player_rotation()`.
+
+## Generated levels
+
+`Scenes/generated_level.tscn` (main scene) builds a level at startup. Its root script `Scripts/Level/level_generator.gd` **extends `main.gd`** (player spawning comes from there) and joins group `level_navigation`. Everything level-related is built in code under a runtime `Level` node; the scene itself only has `SpeedShader`, `UI`, `PlayerSpawn` (moved by the generator), `WorldEnvironment` (copy of `main.tscn`'s) and a `Sun` `DirectionalLight3D`.
+
+- **Order:** always corridor, arena, corridor, … corridor: `arena_count` (4) arenas and one more corridor (5), then a 2-tile `Exit` with a glowing pad. 10 sections total.
+- **Layout** (`Scripts/Level/level_layout.gd`, `RefCounted`, pure data, seeded `RandomNumberGenerator`): a grid of `tile_size` (4 m) tiles, `Vector2i(x, y)` = world `(x, z)`; the start tile is `(0, 0)` heading `(0, -1)` (world −Z). `cells` maps walkable tile → section index, `solid` holds arena pillars, `door_edges` holds the doorway edges (`get_edge_key(a, b)` → `Vector4i`), `sections` holds one Dictionary per section (`kind`, `index`, `kind_number`, `cells`, `solid`, `entry_cell`, `entry_direction`, `exit_cell`, `exit_direction`). `are_connected(a, b)` (same section or a doorway) and `get_distance_field(start, only_section)` (BFS) are the queries everything else uses. Its tunables are plain vars that the generator copies from its own exports (`_copy_layout_settings()`).
+  - Corridors: straight runs of 2–4 tiles joined by 1–3 left/right turns, never heading back against the level's forward direction (so they can't fold into themselves); some runs 2 tiles wide, sometimes a 2-tile side nook; at least `corridor_min_tiles` (8). They start and end 1 tile wide.
+  - Arenas: an 8–11 tile square (grows with the arena number) cut to a circle, rounded square or octagon, behind a 1-tile entry vestibule; 2–5 pillar tiles kept away from the doors and from each other. Exit on the far side or left/right.
+  - Sections touch only at the doorway (exit tile → next entry tile); everywhere else there is at least one empty tile between them, diagonals included. A section that doesn't fit is re-rolled (`max_section_attempts`), and the whole level is re-rolled if one keeps failing. Finally a BFS checks every tile is reachable.
+- **Verticality** (`level_layout.gd::_add_features()`, run after the layout is final; tunables are `Verticality` exports on the generator, copied to the layout). Results: `features` (Dictionaries with `type`), `feature_cells` (tile → type), `floor_heights` (tile → floor height at the tile centre for raised tiles; `get_floor_height(cell)` on the generator). Features never change which tiles are walkable, so the 2D navigation and wall building are unaffected; nothing goes within two tiles of a doorway (one tile for corridor raised stretches), so door, spawn and respawn tiles stay flat.
+  - `&"block"`: raised floor filling whole tiles (`cells`, `height`), built as one box per straight piece so its top has no seams. Arenas get one platform (two in big arenas, 60 %) of 2×2, 3×2 or 2×3 tiles at `arena_platform_height` (2.2 m), not next to other features, only where the rest of the arena stays connected on the ground (`_is_ground_connected`). Corridors (`corridor_raise_chance` 0.75, lands in about half of them) get a raised stretch at `corridor_raise_height` (1.2 m) along the centre line (`runs` recorded by `_build_corridor`), 3–6 tiles, corners allowed in the middle, not on wide runs; its first and last tiles are slopes and must sit on straight bits so you always walk onto a slope from its low end.
+  - `&"ramp"` / `&"stairs"` (`stairs_chance` 0.5): one tile rising to `height` toward `direction`. Collision for both is a wedge (`PrismMesh` with `left_to_right = 0` → `create_convex_shape`, oriented so local −X is uphill); stairs only *look* like steps (`stair_step_height` 0.3 visual boxes), so enemies, which can't step up, walk them like ramps. Every arena platform has one slope with a free foot tile.
+  - `&"box"`: a crate smaller than its tile (`footprint` share, `offset` −1..1 of the free room, `height` `box_min/max_height` 0.9–1.3). Arenas get `arena_min/max_boxes` (2–5), sometimes (`box_pair_chance` 0.3) as a low box pushed against a `tall_box_height` (2.0 m) one to climb in two steps; corridors get up to `corridor_max_boxes` (2) pushed against a wall so the corridor stays passable.
+  - The player's held jump reaches about 1.96 m, so every box is reachable directly; platforms by their slope or by climbing; tall boxes from the low one beside them.
+  - Enemy spawn markers skip box and slope tiles and sit at `get_floor_height()` (so enemies can spawn on platforms); health packs never go on feature tiles.
+- **Geometry** (`level_generator.gd`): one seamless collision slab for the floor and one for an invisible ceiling at `wall_height` (8 m) over the whole level, so nobody wall-runs or climbs out and bodies don't catch on seams; visible floor strips per tile row; walls on every tile edge that isn't connected, merged into long `StaticBody3D` boxes per grid line (not CSG); pillars as full-height boxes. Materials use the greybox texture with world triplanar UVs, tinted per section kind. Everything is on layer 1.
+- **Doors** (`Scripts/Level/level_door.gd`, `StaticBody3D`): one per doorway, built by `setup(size, start_open)`. All start closed (red). `open()` sinks the slab into the floor and turns it green, `close()` raises it; the collision snaps on/off at the start of the move. Door *i* is section *i*'s entrance and section *i − 1*'s exit.
+- **Sections** (`Scripts/Level/level_section.gd`, nodes `Corridor1`, `Arena1`, …, `Exit1`): `WAITING` → `ACTIVE` when the player stands on one of its tiles other than the entry tile (checked from the player's tile each physics tick, no `Area3D`): entrance door closes, first wave after `first_wave_delay`. Waves overlap: the next wave comes `wave_delay` (1.5 s) after `next_wave_kill_ratio` (0.5, rounded up: 2 of 3, 2 of 4, 3 of 5) of the *newest* wave is dead, while its survivors and any older leftovers keep fighting (`_wave_enemies` = every living section enemy, `_current_wave` / `_current_wave_size` = the newest wave). Once the last wave has spawned and every enemy is dead it is `CLEARED` and the exit door opens immediately. New spawns avoid points within `spawn_point_clear_radius` (1.5 m) of a living enemy when possible. Each section has an `EnemySpawner` child with a `Marker3D` per tile (meta `cell`); spawn points are ≥ `min_spawn_distance` (9 m) from the player when possible (fallback 5 m, then 2.5 m), and corridors favour tiles further from the entrance. Every spawned enemy gets `alert()`. Enemies below `kill_height` are removed. API: `activate()`, `reset_section()`, `get_wave_index()`, `get_wave_count()`, `get_alive_count()` (all waves), `is_next_wave_due()`, `get_total_enemy_count()`, `get_respawn_cell()`, `is_active()`, `is_cleared()`; signals `section_activated`, `wave_started`, `section_cleared`. `KIND_CORRIDOR` must match `LevelLayout.Kind.CORRIDOR`.
+- **Waves / difficulty** (exports on the generator, decided when the level is built; enemy stats are never touched):
+  - Enemy table (`enemy_scenes`, `enemy_costs`, `enemy_first_section`, `enemy_weights`): runner cost 1 / from section 0, grunt 2 / 0, thrower 2 / 1, gunner 3 / 2, brute 4 / 3, mortar 4 / 5. Arenas unlock types `arena_unlock_lead` (1) section early.
+  - Section budget: corridors `5 + 1.5 × section`, arenas `16 + 3.5 × section`, plus `level_budget_bonus` (6) per finished level. Waves: corridors 2 (3 from section 4), arenas 3 (4 from section 5). Wave *w* gets a share `1 + wave_budget_ramp (0.35) × w`, so later waves are bigger.
+  - Picks are weighted random among unlocked types that fit the remaining budget, each weight × `1 + bias × (cost − 1)` with bias = `heavy_bias_per_section` (0.06) × section + `heavy_bias_per_wave` (0.08) × wave, so later sections and waves lean toward brutes, gunners and mortars. Arena waves first add `arena_min_enemy_types` (3) different types. Per-wave count stays within `corridor_min/max_per_wave` (2–5) and `arena_min/max_per_wave` (3–9); expensive picks are skipped while they would leave too little budget for the minimum.
+  - Typical level: corridors 4 → 7 enemies, arenas 10 → 17.
+- **Health packs** (`Scripts/Level/health_pack.gd`, plain `Node3D` built in code: glowing green box with white crosses, bobbing and spinning, small `OmniLight3D`): heals `health_pack_heal` (35) via `HealthManager.heal()` when the player comes within `pickup_radius` (1.3 m, distance check, no `Area3D`), and only while the player is missing health, so it can't be wasted at full health. Placement (`_place_health_packs()`, seeded `_rng`, decided when the level is built):
+  - Arenas: always `arena_health_packs` (1), plus one more by `arena_extra_pack_chance` 0.15 + 0.1 per later arena. They go in real corner tiles (a wall on an x side and a y side, pillars count), far from the arena's middle, ≥ 4 tiles from the entrance and ≥ 3 from the exit, pushed into the corner by `_get_corner_offset()`; a second pack goes as far from the first as possible.
+  - Corridors: none before `corridor_health_pack_first_section` (2, so the first corridor never has one). Each later corridor gets one by `corridor_health_pack_chance` (0.45) + `corridor_health_pack_chance_gain` (0.35) per corridor in a row without (`_corridors_without_pack`, reset after one with a pack), on a random tile at least `corridor_health_pack_min_progress` (65 %) of the way to the far end (dead-end nooks included, never the exit tile). So at most two corridors in a row go without.
+  - Over 200 seeds: 5–10 packs per level, mostly 7–8; corridors 2–5 each have one about 60 % of the time; arenas average 1.1 → 1.5.
+  - Sections keep their packs in `health_packs` (`add_health_pack()`); `reset_section()` (death) puts used ones back with `reset_pack()`. API: `is_taken()`, signal `picked_up(heal_amount)`.
+  - Pickup feedback: a soft rising chime (E5, G#5, B5, 0.55 s) synthesized in code into a shared static `AudioStreamWAV` (`_get_pickup_sound()`; the project has no audio files), played by an `AudioStreamPlayer` child at `pickup_volume_db` (−8) with ±`pickup_pitch_variation`; and a green edge glow from `Scenes/UI/ui.tscn` → `HudRoot/HealFlash` (see Screen flashes and hit sound below).
+- **Death:** `_on_player_died()` is overridden: the current section is reset (its enemies removed, used health packs put back, waves start over) and the player comes back on the tile just inside its entrance, which stays shut. Before the first section starts it falls back to `PlayerSpawn`. Overriding works because `main.gd::_ready` connects `died` to `_on_player_died`, which resolves to the subclass method.
+- **Level end:** stepping onto the exit pad activates the `Exit` section; the generator then frees the `Level` node, increments `level_number` (seed + 7919 per level, budgets + `level_budget_bonus`), builds a new level, and puts the player at its start with full health and stamina. Signals `level_generated(level_number, seed)`, `level_completed(level_number)`.
+- **Seed:** `level_seed` 0 = random; the seed in use is printed (`Generated level N with seed S`). Set `level_seed` on the root of `generated_level.tscn` to replay a layout.
+- **Pathfinding:** `get_navigation_direction(from, to)` returns ZERO (= walk straight) when both points share a tile, either is off the grid, or the straight line is clear. Otherwise it follows a BFS distance field from the target's tile (cached until the target changes tile) and heads for the furthest of the next `navigation_lookahead` (6) path tiles reachable in a straight line. "Clear" = the centre line and both edges `navigation_clearance` (0.4 m) to the side cross only connected tiles; diagonal steps need both orthogonal routes open, so paths don't clip corners. Pure grid math, no physics queries.
+- **HUD:** `Scenes/UI/ui.tscn` → `HudRoot/SectionHud` (`Scripts/UI/section_hud.gd`) shows `get_hud_text()` from the generator (level, section, wave, enemies left across all waves, and "WAVE n INCOMING" once the next wave is due); hidden when no node is in group `level_navigation`, so `main.tscn` doesn't show it.
+- The old `Arena` in `main.tscn` (timed spawner) is unrelated and unchanged.
+
+## Scenes
+
+### `Scenes/main.tscn` (test level)
+
+Root `Main` (`Node3D`, `main.gd`). There is no `Player` node in the scene: `main.gd` instantiates `player.tscn` at runtime and places it at `PlayerSpawn` (`Marker3D` at `(0, 0.05, 15.07)`).
+
+- `SpeedShader` and `UI` — instanced scenes.
+- `Ground` — `CSGBox3D` 137 × 0.2 × 121.
+- `TestBlock1`–`TestBlock30`, `Wall1`–`Wall3` — `CSGBox3D` greybox, all with `use_collision = true` and one shared `StandardMaterial3D` (texture `Assets/images (1).jpg`). Roughly:
+  - `TestBlock1/2/3`: small boxes near spawn for step and ledge tests.
+  - `TestBlock4`, `TestBlock5`: long ramps (about 24° and 4°) for slope slides.
+  - `Wall1`–`Wall3`: 67 m long, 11 m tall walls for wall runs (`Wall1` is tilted with the ramp).
+  - `TestBlock6`, `TestBlock18`–`TestBlock30`: thirteen overlapping boxes offset ~0.45 m down and ~0.6 m forward each, forming a staircase.
+  - `TestBlock7`–`TestBlock17`: platforms, angled and vertical slabs further out (up to ~130 m from spawn) for climb and parkour routes.
+- `Arena` (origin `(-25, 0.136, 42)`, south-west of spawn) — a 26 × 26 m square of 4 m tall `CSGBox3D` walls with a 5 m entrance gap in the north wall (the side facing the spawn), two pillars inside, and `EnemySpawner` with nine `Marker3D` spawn points.
+  - `Scripts/Enemies/enemy_spawner.gd`: every `spawn_interval` (20 s, first wave at start) it spawns `enemies_per_wave` (3) of `enemy_scene` (defaults to the dummy; the arena overrides it with `melee_enemy.tscn`) at random free `Marker3D` children, up to `max_alive` (9) alive from that spawner. A point with a living enemy within `spawn_point_clear_radius` is skipped. Spawned enemies get `respawn_time = 0` so they stay dead, face the spawner's position, and pop in by scaling their `Visual` child. API: `spawn_wave()`, `get_alive_count()`, `get_time_until_next_wave()`; signals `enemy_spawned`, `wave_spawned`. It runs all the time, not only while the player is inside. Level sections use it differently: `spawn_interval = 0`, `spawn_on_start = false`, and `spawn_enemies(scenes, points)` spawns an exact list at chosen points (reusing points with a 1.2 m nudge if there are more enemies than points; ignores `max_alive`). `refresh_spawn_points()` re-reads `Marker3D` children added from code; `get_spawn_points()`, `get_alive_enemies()`.
+- `EnemyRange` — five self-respawning dummies and `CrushWall`, east of spawn.
+- `ShootingRange` — `Target1`–`Target4` (`shootable_target.tscn`) and `CrateStack` with `Crate1`–`Crate4` (`physics_crate.tscn`).
+- `WorldEnvironment` — fog on, tonemap mode 3, adjustments on (contrast 1.25, saturation 2.0). One `AreaLight3D` high above as the only light.
+
+New test geometry: add a `CSGBox3D` with `use_collision = true`, or an imported Props-pack model (see Assets).
+
+### Other scenes
+
+| Scene | Root | Notes |
+|---|---|---|
+| `player.tscn` | `CharacterBody3D` | `MeshInstance3D` (hidden capsule), `CollisionShape3D` (capsule 0.35 × 1.8), `Head` at y 1.62 → `Camera3D` (fov 82) → `Hands` (`HandLeft`, `HandRight` sphere meshes) and `Pistol`. |
+| `Weapons/pistol.tscn` | `Node3D` | `Model` = Kenney `blaster-b.glb` at scale 0.5; `Muzzle` (`Marker3D`) → `MuzzleFlash` (unshaded additive sphere + `OmniLight3D`). |
+| `Weapons/projectile.tscn` | `Node3D` | `Tracer`: 1-unit-long unshaded box that the script stretches along Z. No collision body; hits are raycasts. |
+| `Weapons/impact_decal.tscn` | `Decal` | Radial `GradientTexture2D` as the hole; distance fade from 45 m. |
+| `Props/shootable_target.tscn` | `StaticBody3D` | `Model` = `target-large.glb` at scale 3, rotated 90°. Collision is generated by the script. |
+| `Props/physics_crate.tscn` | `RigidBody3D` | mass 3, friction 0.8, `Model` = Props `crate.glb` at scale 1.4, box shape refitted by the script. |
+| `UI/ui.tscn` | `CanvasLayer` | `HudRoot` → `TotalLoudnessBar`, `LoudnessBar`, `StaminaBar` (bottom-left, stacked), `Crosshair`, `AmmoCounter` (bottom-right). |
+| `UI/*_bar.tscn` | `Control` 320 × 18 | A `ProgressBar` with skewed `StyleBoxFlat` background/fill overrides and a `Label` ("Energy", "Loudness", "Total Loudness"). |
+| `speed_shader.tscn` | `CanvasLayer` | `SpeedEffectRect` full-screen `ColorRect` with the speed shader material. |
+| `sample_2.tscn` (repo root) | instance of `Assets/Sample 2.fbx` | Leftover test scene; not referenced by anything. |
+| `Assets/Shaders/shader_progress_bar_test.tscn` | `Node` | Demo `ColorRect` for `progress_bar.gdshader`; not referenced by anything. |
+
+Scenes under `Weapons/` and `Props/` and the two scripts `crosshair.gd` / `ammo_counter.gd` are referenced by path only (no `uid=` in the `ext_resource`). Moving those files breaks the references unless the scenes are re-saved in the editor.
+
+## Shaders
+
+- `Assets/Shaders/SpeedEffectShader.gdshader` (`canvas_item`, reads the screen texture). Driven by one uniform, `speed_strength` (0–1), set by `SpeedEffectController.gd`. It blends three effects outward from screen center: mip-based edge blur (`blur_*`), animated radial speed lines (`line_*`, `center_radius`, `outer_fade_start`), and a tinted vignette. The values in use are the overrides saved in `speed_shader.tscn` (for example `line_count = 700`, `blur_amount = 5.25`), not the shader defaults.
+- `Assets/Shaders/progress_bar.gdshader` — third-party segmented progress-bar shader by LesusX (credited in the file header). Modes: `bar_mode` Solid / RGB / Health Bar / Rainbow Wave / Fluid; `fill_mode` Discrete / Fade / Pour; optional flash, drain, custom-frame and effect uniforms. Several flash uniforms are meant to be set from script. **Not used by the HUD** — the bars are plain `ProgressBar` nodes; only the test scene uses it.
+
+## Assets
+
+All three model packs are by Kenney, licensed **CC0** (each folder keeps its `License.txt`):
+
+| Folder | Pack | Used by |
+|---|---|---|
+| `Assets/Models/Props/` | Prototype Kit 1.0 — 145 GLB level pieces (walls, floors, stairs, columns, pipes, shapes, doors, crates, ladders, targets, vehicles, …) | `crate.glb` in `physics_crate.tscn` |
+| `Assets/Models/Weapons/` | Blaster Kit 2.1 — 40 GLB (`blaster-a`…`r`, bullets, clips, scopes, silencers, grenades, targets, target fragments, crates) | `blaster-b.glb` (pistol), `target-large.glb` and `target-fragment-large/small.glb` (shootable target) |
+| `Assets/Models/Characters/` | Animated Characters Protagonists 1.1 — `characterMedium.fbx`, `idle`/`jump`/`run` animations, four skins | not used yet |
+
+Each pack has `Previews/` PNG thumbnails and a shared `Textures/colormap.png`. Use the files under `Models/GLB format/`.
+
+Collision on imported models: 76 of the 145 Props GLBs already have `Scripts/Import/add_static_collision.gd` set as their import script, so instancing them gives a walkable/climbable `StaticBody3D` on layer 1 with no extra work. Those are the structural pieces: `wall*`, `floor*`, `stairs*`, `column*`, `pipe*`, `shape*`, `crate*`, `ladder*`. The other 69 Props models (animals, buttons, coin, doors, figurines, flag, hats, indicators, levers, numbers, targets, vehicles, weapons, wheelchair) and every Weapons and Characters model have no collision.
+
+Loose files in `Assets/`: `arms.fbx`, `RightHand.fbx`, `HandLeft.png`, `HandRight.png` (hand art not wired up — the game still uses sphere placeholders), `Sample 1.fbx`, `Sample 2.fbx`, `Sample 5.fbx` (test meshes), `images (1).jpg` (greybox texture used by `main.tscn`), `sand-brick-tileset-texture.png` (unused).
+
+Every asset has a sibling `.import` file; keep them together when moving or renaming. File and folder names contain spaces (`GLB format`, `Sample 2.fbx`, `images (1).jpg`) — quote paths in shell commands.
+
+## Project settings (`project.godot`)
+
+- `config/name = "FPS3D"`, tags `3d`, `fps`, `parkour`; features `4.7`, `Forward Plus`.
+- Display: 1920 × 1080 viewport, `window/size/mode = 4` (exclusive fullscreen), stretch `canvas_items` / `expand`.
+- Physics: Jolt 3D, `physics_interpolation = true`, `physics_jitter_fix = 0.0`.
+- Rendering: `rendering_device/driver.windows = "d3d12"`.
+- Every input action has deadzone 0.2 and a single binding; there are no gamepad bindings.
+- Autoload order (each is `*uid://…`, i.e. a script singleton): `InputManager`, `WorldBasicRules`, `GameManager`, `PlayerMovementFeel`, `HandFeel`, `MovementRules`, `MovementSlide`, `MovementEdgeHelp`, `LandingFeel`, `JumpFeel`, `SlideFeel`, `WalkFeel`, `CrouchFeel`, `MovementRun`, `MovementJump`, `MovementCrouch`, `MovementWalk`, `SprintFeel`, `CameraFeel`, `StairFeel`, `MovementWallRun`, `WallRunFeel`, `MovementClimb`, `ClimbFeel`, `UiManager`, `StaminaManager`, `LoudnessManger`, `TotalLoudnessManager`. None of them depend on load order in `_ready`.
+- `.gitignore` ignores `.godot/` and `/android/`; `.gitattributes` normalises text to LF.
+
+## Input actions
+
+`move_forward` W · `move_backward` S · `move_left` A · `move_right` D · `move_jump` Space · `move_sprint` Shift · `move_crouch` Ctrl · `attack` LMB · `shoot` LMB (dormant pistol) · `reload` R · `weapon_sword` Q or 1 · `weapon_halberd` E or 2 · `weapon_shield` F or 3 · `ui_cancel` releases the mouse.
+
+Sprint also triggers by double-tapping forward. Read input through `InputManager`, not `Input` directly (the exception is `head.gd`'s mouse handling).
+
+## Code conventions
+
+- Tabs for indentation, LF line endings, two blank lines between functions.
+- Static typing everywhere: `var x: float = 0.0`, typed params and `-> void` returns. No `:=` inference in existing code.
+- Private members and methods start with `_`; public API is unprefixed.
+- `StringName` literals (`&"name"`) for actions, groups, and method names, stored in `const`s.
+- Every `@export` tunable sits in an `@export_group` and has a `##` doc comment explaining what it does in plain terms. Follow this for any new tunable. (`HandFeel` and the first groups of `MovementSlide` predate this and have few doc comments.)
+- Feature switches are `enable_*` bools checked at the top of the relevant function, returning the neutral value (input unchanged, `0.0`, `1.0`, `false`) when off.
+- Speed-to-strength mappings follow one shape: `ratio = clampf((speed - min) / maxf(full - min, 0.001), 0.0, 1.0)` then `pow(ratio, maxf(curve, 0.001))`, with `*_min_speed`, `*_full_speed`, `*_curve` exports.
+- Small helpers are duplicated per autoload rather than shared (`get_horizontal_direction`, `get_horizontal_wall_normal`, `_smooth_step`, `_degrees_to_radians`, `_get_safe_floor_normal`). Match the local copy instead of introducing a shared utility unless asked.
+- Defensive numerics are the norm: `maxf(value, 0.0)`, `clampf`, `maxf(duration, 0.001)` before dividing, `length_squared() <= 0.001` before normalizing.
+- Frame-rate-independent smoothing uses `1.0 - exp(-speed * delta)` or explicit spring stiffness/damping, not raw `lerp(a, b, k)`.
+- Probe results are passed as `Dictionary` (`"position"`, `"wall_normal"`, `"climb_direction"`, `"floor_normal"`, `"edge_top_y"`, …) and read with `.get(key, default)` wrapped in a type constructor.
+- Comments are English; a few Turkish notes exist — leave them.
+
+## Gotchas
+
+- `LoudnessManger` is misspelled in the file name, autoload name, and all call sites. Don't "fix" it piecemeal — rename everywhere or not at all.
+- The autoload is `UiManager`, the file is `UIManager.gd`.
+- Autoloads are referenced by `uid://`. Every script has a sibling `.gd.uid`; when creating, moving, or renaming a script, keep its `.uid` file with it (or let the editor regenerate it and update `project.godot`).
+- `.tscn` / `project.godot` are text but fragile: keep `unique_id`, `uid`, and `ExtResource` ids intact; prefer minimal hand edits.
+- `.godot/` is ignored cache — never edit or search it.
+- `player.gd` is too large to read in one pass; use the line map above, or grep for the function and read that range.
+- The player's raycasts and shape queries all use the body's own `collision_mask` and exclude only the player's RID, so any body on a masked layer (including props like crates) counts as a wall, ledge, or ceiling.
+- Unused code that looks live (no callers found by grep):
+  - `SprintFeel.sprint_speed`, `enable_sprint_speed_ramp`, `sprint_start_speed`, `sprint_speed_gain_per_second` duplicate `MovementRun` with different values (10.8 vs 12.8). Gameplay reads `MovementRun`; editing the `SprintFeel` copies does nothing.
+  - `MovementEdgeHelp`: `get_edge_exit_vertical_velocity()`, `normal_edge_help_stays_instant`, `view_lift_feedback_multiplier`, `max_visual_lift_height`, `max_forward_velocity_after_help`, `min_feedback_lift_height`, and the normal-edge `forward_velocity_keep_multiplier` / boost settings (normal edge help goes through `_apply_stair_like_edge_result()`, which uses `StairFeel` values instead).
+  - `player.gd::_keep_edge_help_forward_velocity()` and `ClimbFeel.get_climb_edge_over_duration()`.
+- `MovementWallRun` has two combo multipliers that are simply added together for wall-run speed (`wall_run_combo_speed_multiplier` + `wall_run_combo_extra_multiplier`).
+- `playercamera.gd` normalises FOV and velocity roll by `MovementRun.sprint_speed` (the base value), not `get_sprint_speed_limit()`, so combo speed does not widen those ratios.
+- Camera, hands and pistol each keep an independent `_bob_phase`; they are not synchronised with each other.
+- `_was_on_floor` is updated at the very end of `_physics_process`; landing detection (`_update_landing_feedback`) depends on it still holding the previous tick's value.
+- Not yet a git repository (`.gitignore` / `.gitattributes` exist but there is no `.git`).
+- `Assets/Models/*` are Kenney packs with their own `License.txt`; keep those files.
+- The window opens in exclusive fullscreen and captures the mouse on start; press Esc (`ui_cancel`) to release the cursor. There is no quit binding or pause menu.
+- Not implemented yet (so don't look for them): navmesh pathfinding (only the generated level's tile grid), anything that reads loudness for detection, audio (loudness is a number only; all sounds are synthesized in code, see Audio), save/load, menus, level transitions, gamepad input.

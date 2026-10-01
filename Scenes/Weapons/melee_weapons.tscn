@@ -1,0 +1,158 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://Scripts/Weapons/melee_weapons.gd" id="1_melee"]
+[ext_resource type="PackedScene" path="res://Assets/Models/Props/Models/GLB format/weapon-sword.glb" id="2_sword"]
+[ext_resource type="PackedScene" path="res://Assets/Models/Props/Models/GLB format/weapon-shield.glb" id="3_shield"]
+
+[ext_resource type="Script" path="res://Scripts/Weapons/melee_attack_data.gd" id="4_attack"]
+[ext_resource type="Script" path="res://Scripts/Audio/melee_audio.gd" id="5_audio"]
+
+[sub_resource type="Resource" id="Resource_broadsword_attack"]
+script = ExtResource("4_attack")
+windup_time = 0.14
+strike_time = 0.21
+recover_time = 1.0
+hit_area = 0
+reach = 2.7
+arc_degrees = 150.0
+arc_height = 1.1
+ray_spacing_degrees = 5.0
+ray_rows = 5
+sweep_right_to_left = true
+hit_stop_time = 0.1
+hit_stop_every_hit = true
+hit_screen_shake = 0.3
+damage = 1.0
+physics_impulse = 7.0
+impulse_direction = Vector3(-0.8, 0.15, -0.6)
+windup_position = Vector3(0.16, 0.04, 0.06)
+windup_rotation_degrees = Vector3(-58, -70, 0)
+strike_position = Vector3(-0.46, -0.02, -0.06)
+strike_rotation_degrees = Vector3(-66, 82, 0)
+camera_kick_rotation_degrees = Vector3(0, 1.2, 0.8)
+
+[sub_resource type="Resource" id="Resource_halberd_attack"]
+script = ExtResource("4_attack")
+windup_time = 0.17
+strike_time = 0.14
+recover_time = 1.0
+hit_area = 1
+reach = 4.2
+box_size = Vector2(0.55, 0.55)
+damage = 2.0
+physics_impulse = 9.0
+impulse_direction = Vector3(0, 0.05, -1)
+dash_distance = 1.3
+hit_stop_time = 0.16
+hit_screen_shake = 0.45
+dash_duration = 0.2
+windup_position = Vector3(0.02, 0.04, 0.2)
+windup_rotation_degrees = Vector3(-38, 4, 0)
+strike_position = Vector3(-0.1, 0.12, -0.42)
+strike_rotation_degrees = Vector3(-58, 8, 0)
+camera_kick_rotation_degrees = Vector3(-0.9, 0, 0)
+
+[sub_resource type="Resource" id="Resource_shield_attack"]
+script = ExtResource("4_attack")
+windup_time = 0.09
+strike_time = 0.11
+recover_time = 1.0
+hit_area = 1
+reach = 1.5
+box_size = Vector2(0.3, 0.3)
+hit_stop_time = 0.15
+hit_screen_shake = 0.5
+damage = 1.0
+physics_impulse = 12.0
+impulse_direction = Vector3(0, 0.25, -1)
+windup_position = Vector3(0.03, -0.02, 0.1)
+windup_rotation_degrees = Vector3(0, 6, 0)
+strike_position = Vector3(0.2, 0.1, -0.3)
+strike_rotation_degrees = Vector3(10, -32, 4)
+camera_kick_rotation_degrees = Vector3(0.8, 0, 0)
+
+[sub_resource type="Resource" id="Resource_shield_charge_attack"]
+script = ExtResource("4_attack")
+hit_area = 1
+reach = 1.5
+box_size = Vector2(0.7, 1.4)
+box_offset = Vector3(0, -0.75, 0)
+ray_rows = 4
+damage = 1.0
+physics_impulse = 45.0
+impulse_direction = Vector3(0, 0.3, -1)
+swing_loudness = 0.0
+hit_loudness = 22.0
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_shaft"]
+albedo_color = Color(0.36, 0.36, 0.38, 1)
+roughness = 0.85
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_steel"]
+albedo_color = Color(0.5, 0.5, 0.52, 1)
+roughness = 0.6
+
+[sub_resource type="BoxMesh" id="BoxMesh_shaft"]
+material = SubResource("StandardMaterial3D_shaft")
+size = Vector3(0.024, 1.1, 0.024)
+
+[sub_resource type="BoxMesh" id="BoxMesh_axe_blade"]
+material = SubResource("StandardMaterial3D_steel")
+size = Vector3(0.13, 0.17, 0.012)
+
+[sub_resource type="BoxMesh" id="BoxMesh_axe_edge"]
+material = SubResource("StandardMaterial3D_steel")
+size = Vector3(0.03, 0.23, 0.008)
+
+[sub_resource type="BoxMesh" id="BoxMesh_spike"]
+material = SubResource("StandardMaterial3D_steel")
+size = Vector3(0.016, 0.2, 0.012)
+
+[sub_resource type="BoxMesh" id="BoxMesh_hook"]
+material = SubResource("StandardMaterial3D_steel")
+size = Vector3(0.07, 0.045, 0.012)
+
+[node name="MeleeWeapons" type="Node3D"]
+script = ExtResource("1_melee")
+broadsword_attack = SubResource("Resource_broadsword_attack")
+halberd_attack = SubResource("Resource_halberd_attack")
+shield_attack = SubResource("Resource_shield_attack")
+shield_charge_attack = SubResource("Resource_shield_charge_attack")
+
+[node name="Broadsword" type="Node3D" parent="."]
+transform = Transform3D(0.91769, -0.06564, -0.39184, 0.22431, 0.89964, 0.37461, 0.32793, -0.43166, 0.84031, 0.2, -0.3, -0.42)
+
+[node name="Model" parent="Broadsword" instance=ExtResource("2_sword")]
+transform = Transform3D(0, 0, 0.7, -1.6, 0, 0, 0, -0.3, 0, 0, 0.32, 0.015)
+
+[node name="Halberd" type="Node3D" parent="."]
+transform = Transform3D(0.98134, -0.06748, -0.18006, 0.15038, 0.85287, 0.5, 0.11983, -0.51775, 0.8471, 0.23, -0.36, -0.46)
+
+[node name="Shaft" type="MeshInstance3D" parent="Halberd"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.25, 0)
+mesh = SubResource("BoxMesh_shaft")
+
+[node name="AxeBlade" type="MeshInstance3D" parent="Halberd"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.075, 0.7, 0)
+mesh = SubResource("BoxMesh_axe_blade")
+
+[node name="AxeEdge" type="MeshInstance3D" parent="Halberd"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.15, 0.7, 0)
+mesh = SubResource("BoxMesh_axe_edge")
+
+[node name="Spike" type="MeshInstance3D" parent="Halberd"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+mesh = SubResource("BoxMesh_spike")
+
+[node name="BackHook" type="MeshInstance3D" parent="Halberd"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.045, 0.72, 0)
+mesh = SubResource("BoxMesh_hook")
+
+[node name="Shield" type="Node3D" parent="."]
+transform = Transform3D(0.8398, -0.01858, 0.54258, -0.13504, 0.96085, 0.24192, -0.52584, -0.27644, 0.80441, -0.25, -0.24, -0.45)
+
+[node name="Model" parent="Shield" instance=ExtResource("3_shield")]
+transform = Transform3D(0.8, 0, 0, 0, 0, 0.8, 0, -0.8, 0, 0, 0, 0)
+
+[node name="Audio" type="Node" parent="."]
+script = ExtResource("5_audio")

@@ -1,0 +1,60 @@
+[gd_scene format=3 uid="uid://muji3htplmk6"]
+
+[ext_resource type="Script" uid="uid://dumkkux8rx0bj" path="res://Scripts/player.gd" id="1_4flbx"]
+[ext_resource type="Script" uid="uid://du47g77jbttxm" path="res://Scripts/head.gd" id="2_6t5aa"]
+[ext_resource type="Script" uid="uid://d0b6sd3ivlaor" path="res://Scripts/playercamera.gd" id="3_vgqql"]
+[ext_resource type="Script" uid="uid://bvjdc3elv8l4y" path="res://Scripts/hands.gd" id="4_vgqql"]
+[ext_resource type="PackedScene" path="res://Scenes/Weapons/melee_weapons.tscn" id="6_melee"]
+[ext_resource type="Script" path="res://Scripts/Audio/player_audio.gd" id="7_audio"]
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_g4v7s"]
+radius = 0.35
+height = 1.8
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_g4v7s"]
+radius = 0.35
+height = 1.8
+
+[sub_resource type="SphereMesh" id="SphereMesh_fkybt"]
+
+[sub_resource type="SphereMesh" id="SphereMesh_x3wgy"]
+
+[node name="Player" type="CharacterBody3D" unique_id=1060846939]
+floor_snap_length = 0.2
+script = ExtResource("1_4flbx")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=201285104]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+visible = false
+mesh = SubResource("CapsuleMesh_g4v7s")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1522945432]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+shape = SubResource("CapsuleShape3D_g4v7s")
+
+[node name="Head" type="Node3D" parent="." unique_id=6226382]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.62, 0)
+script = ExtResource("2_6t5aa")
+
+[node name="Camera3D" type="Camera3D" parent="Head" unique_id=530073933]
+physics_interpolation_mode = 1
+doppler_tracking = 2
+current = true
+fov = 82.0
+script = ExtResource("3_vgqql")
+
+[node name="Hands" type="Node3D" parent="Head/Camera3D" unique_id=781731570]
+script = ExtResource("4_vgqql")
+
+[node name="HandLeft" type="MeshInstance3D" parent="Head/Camera3D/Hands" unique_id=158992811]
+transform = Transform3D(0.28, 0, 0, 0, 0.28, 0, 0, 0, 0.28, 0, 0, 0)
+mesh = SubResource("SphereMesh_fkybt")
+
+[node name="HandRight" type="MeshInstance3D" parent="Head/Camera3D/Hands" unique_id=148627150]
+transform = Transform3D(0.28, 0, 0, 0, 0.28, 0, 0, 0, 0.28, 0, 0, 0)
+mesh = SubResource("SphereMesh_x3wgy")
+
+[node name="MeleeWeapons" parent="Head/Camera3D" instance=ExtResource("6_melee")]
+
+[node name="Audio" type="Node" parent="."]
+script = ExtResource("7_audio")

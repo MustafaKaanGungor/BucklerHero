@@ -1,0 +1,24 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://Scripts/Weapons/impact_decal.gd" id="1_decal"]
+
+[sub_resource type="Gradient" id="Gradient_hole"]
+offsets = PackedFloat32Array(0, 0.16, 0.3, 0.55, 1)
+colors = PackedColorArray(0.015, 0.014, 0.013, 1, 0.04, 0.036, 0.032, 1, 0.11, 0.095, 0.08, 0.8, 0.14, 0.125, 0.105, 0.3, 0.15, 0.13, 0.11, 0)
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_hole"]
+gradient = SubResource("Gradient_hole")
+width = 96
+height = 96
+fill = 1
+fill_from = Vector2(0.5, 0.5)
+fill_to = Vector2(0.5, 0)
+
+[node name="ImpactDecal" type="Decal"]
+size = Vector3(0.11, 0.06, 0.11)
+texture_albedo = SubResource("GradientTexture2D_hole")
+normal_fade = 0.35
+distance_fade_enabled = true
+distance_fade_begin = 45.0
+distance_fade_length = 10.0
+script = ExtResource("1_decal")

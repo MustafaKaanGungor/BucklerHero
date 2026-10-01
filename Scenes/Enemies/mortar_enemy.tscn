@@ -1,0 +1,91 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://Scripts/Enemies/thrower_enemy.gd" id="1_script"]
+[ext_resource type="Script" path="res://Scripts/Audio/enemy_audio.gd" id="90_audio"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_body"]
+radius = 0.5
+height = 2.0
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_body"]
+albedo_color = Color(0.55, 0.33, 0.12, 1)
+roughness = 0.8
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_body"]
+material = SubResource("StandardMaterial3D_body")
+radius = 0.5
+height = 2.0
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_visor"]
+albedo_color = Color(0.1, 0.1, 0.1, 1)
+roughness = 0.6
+
+[sub_resource type="BoxMesh" id="BoxMesh_visor"]
+material = SubResource("StandardMaterial3D_visor")
+size = Vector3(0.6, 0.12, 0.2)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_weapon"]
+albedo_color = Color(0.25, 0.25, 0.25, 1)
+roughness = 0.7
+
+[sub_resource type="CylinderMesh" id="Mesh_weapon"]
+material = SubResource("StandardMaterial3D_weapon")
+top_radius = 0.13
+bottom_radius = 0.13
+height = 0.9
+
+[node name="MortarEnemy" type="CharacterBody3D"]
+script = ExtResource("1_script")
+max_health = 7.0
+blocks_shield_charge = true
+fragment_count = 20
+fragment_size_range = Vector2(0.16, 0.36)
+fragment_spawn_radius = 0.4
+fragment_spawn_height = 1.8
+hit_knockback_speed = 2.0
+hit_stagger_time = 0.2
+move_speed = 2.2
+acceleration = 10.0
+turn_speed_degrees = 200.0
+sight_height = 1.7
+separation_distance = 1.5
+preferred_min_distance = 9.0
+attack_range = 22.0
+attack_requires_line_of_sight = true
+attack_max_height_difference = 8.0
+attack_damage = 22.0
+attack_windup_time = 1.2
+attack_recover_time = 2.2
+attack_windup_turn_multiplier = 1.0
+windup_lean_degrees = 10.0
+strike_lean_degrees = 10.0
+lob_throw = true
+lob_flight_time = 1.4
+projectile_gravity = 18.0
+throw_height = 2.1
+throw_forward_offset = 0.2
+explosion_radius = 3.0
+explosion_edge_damage_ratio = 0.4
+aim_spread_degrees = 0.0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.0, 0)
+shape = SubResource("CapsuleShape3D_body")
+
+[node name="Visual" type="Node3D" parent="."]
+
+[node name="Body" type="MeshInstance3D" parent="Visual"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.0, 0)
+mesh = SubResource("CapsuleMesh_body")
+
+[node name="Visor" type="MeshInstance3D" parent="Visual"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.67, -0.42)
+mesh = SubResource("BoxMesh_visor")
+
+[node name="Weapon" type="MeshInstance3D" parent="Visual"]
+transform = Transform3D(1, 0, 0, 0, 0.81915, 0.57358, 0, -0.57358, 0.81915, 0.45, 1.75, 0.05)
+mesh = SubResource("Mesh_weapon")
+
+[node name="Audio" type="Node3D" parent="."]
+script = ExtResource("90_audio")
+profile = 6
