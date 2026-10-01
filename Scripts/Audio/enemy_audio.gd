@@ -1,8 +1,9 @@
 extends Node3D
 
 ## Positional sounds for one enemy: the attack telegraph (windup), the attack itself (strike) and
-## the death shatter. Child node "Audio" in every enemy scene; driven only by the enemy's signals
-## (melee_enemy.gd: attack_started, attack_struck, attack_cancelled; dummy_enemy.gd: died).
+## the death shatter, plus a push-off when the enemy jumps. Child node "Audio" in every enemy scene;
+## driven only by the enemy's signals (melee_enemy.gd: attack_started, attack_struck,
+## attack_cancelled, jumped; dummy_enemy.gd: died).
 ## profile picks the voice. Sounds are synthesized once per profile and shared by all enemies.
 ## The death sound plays on a detached one-shot player, because arena enemies free themselves
 ## the moment they die.
@@ -28,6 +29,8 @@ enum Profile {
 @export var strike_volume_db: float = -2.0
 ## Volume of the death shatter.
 @export var death_volume_db: float = 0.0
+## Volume of the jump push-off.
+@export var jump_volume_db: float = -6.0
 ## Distance in metres at which the sounds play at their set volume; they get quieter further away.
 @export var unit_size: float = 8.0
 ## Random pitch change per sound.
@@ -38,6 +41,7 @@ static var _banks: Dictionary = {}
 
 var _windup_player: AudioStreamPlayer3D
 var _strike_player: AudioStreamPlayer3D
+var _jump_player: AudioStreamPlayer3D
 var _bank: Dictionary = {}
 
 
@@ -45,6 +49,7 @@ func _ready() -> void:
 	_bank = _get_bank(profile)
 	_windup_player = _add_player("Windup", _bank.get(&"windup") as AudioStream, windup_volume_db)
 	_strike_player = _add_player("Strike", _bank.get(&"strike") as AudioStream, strike_volume_db)
+	_jump_player = _add_player("Jump", _get_jump_sound(), jump_volume_db + float(_bank.get(&"death_volume", 0.0)))
 
 	var enemy: Node = get_parent()
 	if enemy.has_signal(&"attack_started"):
@@ -53,6 +58,8 @@ func _ready() -> void:
 		enemy.connect(&"attack_struck", _on_attack_struck)
 	if enemy.has_signal(&"attack_cancelled"):
 		enemy.connect(&"attack_cancelled", _on_attack_cancelled)
+	if enemy.has_signal(&"jumped"):
+		enemy.connect(&"jumped", _on_jumped)
 	if enemy.has_signal(&"died"):
 		enemy.connect(&"died", _on_died)
 
@@ -70,6 +77,13 @@ func _on_attack_struck() -> void:
 
 func _on_attack_cancelled() -> void:
 	_windup_player.stop()
+
+
+## Bigger enemies thump deeper (same pitch factor as their death sound); higher jumps a bit louder.
+func _on_jumped(obstacle_height: float) -> void:
+	_jump_player.pitch_scale = float(_bank.get(&"death_pitch", 1.0)) * (1.0 + randf_range(-pitch_variation, pitch_variation))
+	_jump_player.volume_db = jump_volume_db + float(_bank.get(&"death_volume", 0.0)) + clampf(obstacle_height - 1.0, -0.5, 1.5) * 2.0
+	_jump_player.play()
 
 
 func _on_died() -> void:
@@ -133,6 +147,17 @@ static func _get_bank(for_profile: Profile) -> Dictionary:
 	bank[&"death"] = _get_shatter()
 	_banks[for_profile] = bank
 	return bank
+
+
+## A heavy push-off: a low thump with a short whoosh of air. Shared by every profile.
+static func _get_jump_sound() -> AudioStream:
+	if _banks.has(&"jump"):
+		return _banks[&"jump"]
+	var jump: PackedFloat32Array = SoundSynth.thud(0.16, 130.0, 70.0, 30.0, 0.9, 35.0, 0.45, 181)
+	jump = SoundSynth.mix(jump, SoundSynth.whoosh(0.28, 250.0, 800.0, 350.0, 0.3, 1.4, 182), 0.7, 0.02)
+	var stream: AudioStream = _wav(jump)
+	_banks[&"jump"] = stream
+	return stream
 
 
 ## Breaking apart: a low knock and a burst of bright cracks, shared by every profile (pitched per profile).

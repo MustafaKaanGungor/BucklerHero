@@ -1,7 +1,8 @@
 extends ColorRect
 
 ## Brief coloured glow around the screen edges when the player heals or takes damage.
-## One node per kind of flash (see trigger); ui.tscn has HealFlash (green) and DamageFlash (red).
+## One node per kind of flash (see trigger); ui.tscn has HealFlash (green), DamageFlash (red) and
+## EmpowerFlash (orange, fired by the combo meter on reaching S).
 ## Full-screen, ignores the mouse, and draws nothing while idle. Bigger amounts flash brighter.
 
 enum Trigger {
@@ -9,6 +10,8 @@ enum Trigger {
 	HEAL,
 	## HealthManager.damaged (hits the shield blocked don't count)
 	DAMAGE,
+	## Nothing automatic: another script calls flash() (the S-rank burst).
+	MANUAL,
 }
 
 const VIGNETTE_SHADER_CODE: String = """

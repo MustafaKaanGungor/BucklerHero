@@ -6,6 +6,8 @@ extends Node
 ## stab for the halberd, a blunt thump for the shield (bash and charge knock-aways). Shield charge:
 ## a whoosh when it starts, a thump when an enemy is picked up, a crunch when enemies are crushed,
 ## and a heavy slam for wall / heavy-enemy impacts and for a full shield stopping the charge.
+## Empowered (S rank) moves (empowered_attack_started) add their own layer on top: a ringing slash
+## for the sword wave, a deep rushing roar for the halberd's long dash, a rumble for the crushing charge.
 ## All sounds are synthesized once in _ready (sound_synth.gd).
 
 const SoundSynth = preload("res://Scripts/Audio/sound_synth.gd")
@@ -51,6 +53,18 @@ func _ready() -> void:
 	_add_sound(&"crush", crunch, impact_volume_db)
 	_add_sound(&"impact", SoundSynth.thud(0.4, 95.0, 38.0, 9.0, 1.0, 18.0, 0.4, 35), impact_volume_db)
 
+	# Empowered moves.
+	var wave: PackedFloat32Array = SoundSynth.whoosh(0.7, 1200.0, 4200.0, 1800.0, 0.2, 3.0, 41)
+	wave = SoundSynth.mix(wave, SoundSynth.tone_sweep(0.6, 1320.0, 1760.0, 0.05, 11.0, 42), 0.35)
+	wave = SoundSynth.mix(wave, SoundSynth.tone_sweep(0.6, 1980.0, 2640.0, 0.05, 13.0, 43), 0.2)
+	_add_sound(&"empowered_broadsword", wave, swing_volume_db + 3.0)
+	var lunge: PackedFloat32Array = SoundSynth.whoosh(0.6, 180.0, 900.0, 260.0, 0.25, 2.2, 44)
+	lunge = SoundSynth.mix(lunge, SoundSynth.thud(0.3, 110.0, 50.0, 10.0, 0.8, 20.0, 0.4, 45), 0.8)
+	_add_sound(&"empowered_halberd", lunge, swing_volume_db + 4.0)
+	var rumble: PackedFloat32Array = SoundSynth.growl(0.9, 45.0, 0.9, 46)
+	rumble = SoundSynth.mix(rumble, SoundSynth.whoosh(0.8, 150.0, 600.0, 250.0, 0.3, 1.5, 47), 0.8)
+	_add_sound(&"empowered_shield", rumble, swing_volume_db + 4.0)
+
 	_weapons.connect(&"attack_started", _on_attack_started)
 	_weapons.connect(&"attack_hit", _on_attack_hit)
 	_weapons.connect(&"shield_charge_started", _on_shield_charge_started)
@@ -58,6 +72,7 @@ func _ready() -> void:
 	_weapons.connect(&"shield_carry_crushed", _on_shield_carry_crushed)
 	_weapons.connect(&"shield_charge_impact", _on_shield_charge_impact)
 	_weapons.connect(&"shield_charge_blocked", _on_shield_charge_impact)
+	_weapons.connect(&"empowered_attack_started", _on_empowered_attack_started)
 
 
 ## Plays one of the sounds by name (see _ready), with an optional extra pitch factor.
@@ -67,6 +82,10 @@ func play_sound(sound_name: StringName, pitch: float = 1.0) -> void:
 		return
 	player.pitch_scale = maxf(pitch * (1.0 + randf_range(-pitch_variation, pitch_variation)), 0.1)
 	player.play()
+
+
+func _on_empowered_attack_started(weapon_id: StringName) -> void:
+	play_sound(StringName("empowered_%s" % weapon_id))
 
 
 func _on_attack_started(weapon_id: StringName) -> void:

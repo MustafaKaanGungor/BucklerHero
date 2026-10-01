@@ -32,6 +32,10 @@ signal shield_charge_released
 signal shield_carry_changed(carried_count: int)
 signal shield_carry_crushed(crushed_count: int)
 signal shield_charge_blocked
+## A shield charge slammed into a heavy enemy and staggered it.
+signal shield_charge_stunned(enemy: Node3D)
+## An S-rank empowered move began: the sword's wave, the halberd's long dash or the crushing charge.
+signal empowered_attack_started(weapon_id: StringName)
 ## The charge slammed into a wall or a heavy enemy and knocked the player back.
 signal shield_charge_impact
 
@@ -66,6 +70,7 @@ const METHOD_ON_SHIELD_CHARGE_IMPACT: StringName = &"on_shield_charge_impact"
 const METHOD_START_SHIELD_CARRY: StringName = &"start_shield_carry"
 const METHOD_END_SHIELD_CARRY: StringName = &"end_shield_carry"
 const METHOD_ON_SHIELD_CRUSH: StringName = &"on_shield_crush"
+const SwordWave = preload("res://Scripts/Weapons/sword_wave.gd")
 
 @export_group("Nodes")
 @export var player_path: NodePath = NodePath("../../..")
@@ -170,6 +175,36 @@ const METHOD_ON_SHIELD_CRUSH: StringName = &"on_shield_crush"
 ## Loudness added to the stealth meter by an impact.
 @export var shield_impact_loudness: float = 30.0
 
+@export_group("Empowered (S Rank)")
+## At this combo rank (ComboMeter: 0 D ... 4 S) or above, attacks are empowered. The normal shield
+## bash is never empowered.
+@export var enable_empowerment: bool = true
+@export var empowered_rank: int = 4
+## Broadsword: each swing also launches a slash wave that flies ahead and cuts through enemies.
+## Damage of each wave hit.
+@export var sword_wave_damage: float = 1.0
+## Wave speed (m/s), range (m) and width (m).
+@export var sword_wave_speed: float = 28.0
+@export var sword_wave_range: float = 22.0
+@export var sword_wave_width: float = 3.2
+## The wave follows the camera's pitch, limited to this range (degrees, negative is down), so it
+## doesn't plough into the floor at your feet.
+@export var sword_wave_pitch_limits: Vector2 = Vector2(-12.0, 30.0)
+## Halberd: the lunge covers this many times its normal distance ...
+@export var halberd_empowered_dash_multiplier: float = 4.0
+## ... over this many times its normal duration ...
+@export var halberd_empowered_dash_duration_multiplier: float = 2.0
+## ... and everything it hits on the way takes this many times the damage. The player passes
+## through the enemies it hits instead of stopping against them.
+@export var halberd_empowered_damage_multiplier: float = 2.0
+## Shield charge: nothing is picked up; every enemy it touches (heavy ones too) is crushed on the
+## spot and the charge keeps going. Screen shake per crushed enemy.
+@export_range(0.0, 1.0) var empowered_charge_crush_screen_shake: float = 0.35
+## Glow over the weapon in hand while empowered.
+@export var empowered_glow_color: Color = Color(1.0, 0.35, 0.2, 0.35)
+## Glow pulses per second.
+@export var empowered_glow_pulse_speed: float = 3.0
+
 @export_group("Visuals")
 ## Keeps the viewmodels from casting odd shadows onto the world.
 @export var cast_shadows: bool = false
@@ -211,6 +246,14 @@ var _charge_was_blocked: bool = false
 var _charge_blocker: Node3D
 var _pending_impact_heading: Vector3 = Vector3.ZERO
 var _pending_impact_timer: float = 0.0
+var _attack_empowered: bool = false
+var _charge_empowered: bool = false
+var _empowered_dash_timer: float = 0.0
+var _dash_passed_enemies: Array[Node3D] = []
+var _dash_pass_timer: float = 0.0
+var _glow_material: StandardMaterial3D
+var _glow_time: float = 0.0
+var _is_glowing: bool = false
 
 
 func _ready() -> void:
@@ -239,6 +282,7 @@ func _physics_process(delta: float) -> void:
 	_update_attack_input(delta)
 	_update_attack(delta)
 	_update_shield_charge(delta)
+	_update_dash_pass_through(delta)
 
 
 func _process(delta: float) -> void:
@@ -251,6 +295,7 @@ func _process(delta: float) -> void:
 			_is_equipping = false
 
 	_apply_weapon_pose()
+	_update_empowered_glow(delta)
 
 
 func get_equipped_weapon() -> StringName:
@@ -314,6 +359,16 @@ func is_shield_charge_held() -> bool:
 	return _is_shield_charge_held
 
 
+## True when the combo meter is high enough (S) for empowered attacks.
+func is_empowered() -> bool:
+	return enable_empowerment and ComboMeter.get_rank() >= empowered_rank
+
+
+## True while the current attack or shield charge is an empowered one.
+func is_attack_empowered() -> bool:
+	return (_is_attacking and _attack_empowered) or (_is_shield_charge_held and _charge_empowered)
+
+
 func get_carried_enemy_count() -> int:
 	return _carried_enemies.size()
 
@@ -359,6 +414,8 @@ func attack() -> bool:
 	_hit_stop_timer = 0.0
 	_attack_hit_ids.clear()
 	_attack_next_ray_angle = attack_data.get_half_arc_degrees()
+	# The shield's bash is never empowered; only its charge is.
+	_attack_empowered = is_empowered() and _equipped_weapon != WEAPON_SHIELD
 	_register_weapon_use(_equipped_weapon)
 	# Busy for the whole attack. Switching away doesn't skip it; only another weapon's attack clears it.
 	_recover_timers[_equipped_weapon] = attack_data.get_duration()
@@ -438,6 +495,9 @@ func _start_shield_charge() -> void:
 
 	_is_shield_charge_held = true
 	_shield_charge_hit_timer = 0.0
+	_charge_empowered = is_empowered()
+	if _charge_empowered:
+		empowered_attack_started.emit(WEAPON_SHIELD)
 	# A charge counts as attacking with the shield for combos, but has no recover of its own.
 	_register_weapon_use(WEAPON_SHIELD)
 	shield_charge_started.emit()
@@ -448,6 +508,7 @@ func _release_shield_charge() -> void:
 		return
 
 	_is_shield_charge_held = false
+	_charge_empowered = false
 	if player != null and player.has_method(METHOD_RELEASE_SHIELD_CHARGE):
 		player.call(METHOD_RELEASE_SHIELD_CHARGE)
 	shield_charge_released.emit()
@@ -459,6 +520,7 @@ func _update_shield_charge(delta: float) -> void:
 		if not player_is_charging:
 			# The player side ended it: out of stamina, a low ceiling, or a climb or wall run took over.
 			_is_shield_charge_held = false
+			_charge_empowered = false
 			shield_charge_released.emit()
 		elif not InputManager.is_attack_pressed() or _equipped_weapon != WEAPON_SHIELD:
 			_release_shield_charge()
@@ -486,6 +548,7 @@ func _update_shield_charge(delta: float) -> void:
 					"weapon": WEAPON_SHIELD,
 					"attacker": player,
 				})
+				shield_charge_stunned.emit(blocker)
 			_play_shield_impact(heading)
 		shield_charge_blocked.emit()
 		return
@@ -749,6 +812,11 @@ func _update_attack(delta: float) -> void:
 		_attack_strike_started = true
 		_start_strike(attack_data)
 
+	# The empowered halberd keeps hitting everything in front for as long as its long dash lasts.
+	if _empowered_dash_timer > 0.0:
+		_empowered_dash_timer = maxf(_empowered_dash_timer - delta, 0.0)
+		_update_attack_hits(attack_data, 1.0)
+
 	# The tick that passes strike_end still checks once, so a fast strike can't skip its last hits.
 	if _attack_strike_started and not _attack_strike_finished:
 		var strike_progress: float = attack_data.get_strike_progress(progress)
@@ -768,11 +836,22 @@ func _start_strike(attack_data: MeleeAttackData) -> void:
 			_degrees_to_radians(attack_data.camera_kick_rotation_degrees)
 		)
 
+	if _attack_empowered:
+		empowered_attack_started.emit(_equipped_weapon)
+		if _equipped_weapon == WEAPON_BROADSWORD:
+			_launch_sword_wave()
+
 	if attack_data.dash_distance <= 0.0 or player == null or not player.has_method(METHOD_START_DASH):
 		return
 
 	var dash_direction: Vector3 = -Basis(Vector3.UP, player.rotation.y).z
-	player.call(METHOD_START_DASH, dash_direction, attack_data.dash_distance, attack_data.dash_duration)
+	var dash_distance: float = attack_data.dash_distance
+	var dash_duration: float = attack_data.dash_duration
+	if _attack_empowered and _equipped_weapon == WEAPON_HALBERD:
+		dash_distance *= maxf(halberd_empowered_dash_multiplier, 0.0)
+		dash_duration *= maxf(halberd_empowered_dash_duration_multiplier, 0.01)
+		_empowered_dash_timer = dash_duration
+	player.call(METHOD_START_DASH, dash_direction, dash_distance, dash_duration)
 
 
 func _finish_attack() -> void:
@@ -788,6 +867,8 @@ func _cancel_attack() -> void:
 	_is_attacking = false
 	_attack_timer = 0.0
 	_attack_hit_ids.clear()
+	_attack_empowered = false
+	_empowered_dash_timer = 0.0
 	if _weapons.has(_equipped_weapon):
 		var weapon: Node3D = _weapons[_equipped_weapon] as Node3D
 		weapon.transform = _idle_transforms[_equipped_weapon]
@@ -876,6 +957,10 @@ func _cast_hit_ray(
 			return
 
 		excluded_rids.append(ray_hit.get("rid"))
+		# An empowered charge crushes every enemy it touches on the spot.
+		if _is_casting_charge_hits and _charge_empowered and target.has_method(METHOD_ON_SHIELD_CRUSH):
+			_crush_on_contact(target)
+			continue
 		# A charge picks enemies up instead of hitting them.
 		if _is_casting_charge_hits and target.has_method(METHOD_START_SHIELD_CARRY):
 			_try_carry_enemy(target)
@@ -904,15 +989,23 @@ func _build_hit_info(
 		"normal": Vector3(ray_hit.get("normal", Vector3.UP)),
 		"direction": push_direction.normalized(),
 		"collider": target,
-		"damage": attack_data.damage,
+		"damage": attack_data.damage * _get_damage_multiplier(attack_data),
 		"weapon": _equipped_weapon,
 		"attacker": player,
 	}
 
 
+func _get_damage_multiplier(attack_data: MeleeAttackData) -> float:
+	if _attack_empowered and not _is_casting_charge_hits and attack_data == halberd_attack:
+		return maxf(halberd_empowered_damage_multiplier, 0.0)
+	return 1.0
+
+
 func _apply_hit(attack_data: MeleeAttackData, target: Node3D, hit_info: Dictionary) -> void:
 	if target.has_method(METHOD_ON_MELEE_HIT):
 		target.call(METHOD_ON_MELEE_HIT, hit_info)
+		if _empowered_dash_timer > 0.0 and not _is_casting_charge_hits:
+			_pass_through(target)
 		if not _is_casting_charge_hits:
 			_trigger_hit_stop(attack_data, target)
 			_trigger_hit_shake(attack_data)
@@ -1136,3 +1229,122 @@ func _player_bool(method_name: StringName, fallback: bool) -> bool:
 	if player == null or not player.has_method(method_name):
 		return fallback
 	return bool(player.call(method_name))
+
+
+# --- Empowered attacks (S rank) -----------------------------------------------------------------
+
+## Launches the slash wave from in front of the camera, along the camera's facing (pitch limited).
+func _launch_sword_wave() -> void:
+	if _camera == null or player == null:
+		return
+	var forward: Vector3 = -_camera.global_transform.basis.z
+	var flat: Vector3 = Vector3(forward.x, 0.0, forward.z)
+	if flat.length_squared() <= 0.0001:
+		flat = -Basis(Vector3.UP, player.rotation.y).z
+	flat = flat.normalized()
+	var pitch: float = clampf(asin(clampf(forward.y, -1.0, 1.0)), deg_to_rad(sword_wave_pitch_limits.x), deg_to_rad(sword_wave_pitch_limits.y))
+	var direction: Vector3 = (flat * cos(pitch) + Vector3.UP * sin(pitch)).normalized()
+
+	var wave: Node3D = Node3D.new()
+	wave.set_script(SwordWave)
+	wave.set(&"speed", sword_wave_speed)
+	wave.set(&"max_distance", sword_wave_range)
+	wave.set(&"width", sword_wave_width)
+	wave.set(&"collision_mask", hit_collision_mask)
+	wave.set(&"damage", sword_wave_damage)
+	var parent: Node = get_tree().current_scene if get_tree().current_scene != null else get_tree().root
+	parent.add_child(wave)
+	var start: Vector3 = _camera.global_position + Vector3.DOWN * 0.45 + flat * 1.2
+	wave.call(&"launch", start, direction, self, _get_excluded_rids())
+
+
+## Called by a sword wave for everything it cuts. Works like a sword hit without the hit-stop (the
+## swing is long over), so sounds and the combo meter count it.
+func on_sword_wave_hit(target: Node3D, hit_info: Dictionary) -> void:
+	if target == null or not is_instance_valid(target):
+		return
+	hit_info["weapon"] = WEAPON_BROADSWORD
+	hit_info["attacker"] = player
+	if target.has_method(METHOD_ON_MELEE_HIT):
+		target.call(METHOD_ON_MELEE_HIT, hit_info)
+	var rigid_body: RigidBody3D = target as RigidBody3D
+	if rigid_body != null and broadsword_attack != null and broadsword_attack.physics_impulse > 0.0:
+		rigid_body.sleeping = false
+		rigid_body.apply_central_impulse(Vector3(hit_info.get("direction", Vector3.ZERO)) * broadsword_attack.physics_impulse)
+	attack_hit.emit(WEAPON_BROADSWORD, hit_info)
+
+
+## The empowered halberd dash goes through the enemies it hits instead of stopping against them.
+func _pass_through(target: Node3D) -> void:
+	var body: PhysicsBody3D = target as PhysicsBody3D
+	if body == null or player == null or _dash_passed_enemies.has(target):
+		return
+	player.add_collision_exception_with(body)
+	body.add_collision_exception_with(player)
+	_dash_passed_enemies.append(target)
+
+
+## Ends the pass-through a moment after the dash, once the player is clear of the enemies.
+func _update_dash_pass_through(delta: float) -> void:
+	if _dash_passed_enemies.is_empty():
+		return
+	if _empowered_dash_timer > 0.0:
+		_dash_pass_timer = 0.3
+		return
+	_dash_pass_timer -= delta
+	if _dash_pass_timer > 0.0:
+		return
+	for enemy in _dash_passed_enemies:
+		var body: PhysicsBody3D = enemy as PhysicsBody3D
+		if body != null and is_instance_valid(body) and player != null:
+			player.remove_collision_exception_with(body)
+			body.remove_collision_exception_with(player)
+	_dash_passed_enemies.clear()
+
+
+## Empowered charge: the enemy breaks immediately (heavy ones too) and the charge carries on.
+func _crush_on_contact(target: Node3D) -> void:
+	if target.has_method(&"is_dead") and bool(target.call(&"is_dead")):
+		return
+	var heading: Vector3 = _get_charge_heading()
+	# on_shield_crush throws the pieces against "direction" (back off a wall); here they should fly
+	# on ahead of the charge, so it gets the reversed heading.
+	target.call(METHOD_ON_SHIELD_CRUSH, {
+		"position": target.global_position,
+		"normal": heading,
+		"direction": -heading,
+		"collider": target,
+		"weapon": WEAPON_SHIELD,
+		"attacker": player,
+	})
+	LoudnessManger.register_sound(shield_crush_loudness * 0.5)
+	if _camera != null and _camera.has_method(METHOD_ADD_SCREEN_SHAKE):
+		_camera.call(METHOD_ADD_SCREEN_SHAKE, empowered_charge_crush_screen_shake)
+	shield_carry_crushed.emit(1)
+
+
+## A pulsing glow over the weapons while attacks are empowered.
+func _update_empowered_glow(delta: float) -> void:
+	var should_glow: bool = is_empowered()
+	if should_glow != _is_glowing:
+		_is_glowing = should_glow
+		if _glow_material == null:
+			_glow_material = StandardMaterial3D.new()
+			_glow_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			_glow_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			_glow_material.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+			_glow_material.albedo_color = empowered_glow_color
+		for weapon_id in _weapons.keys():
+			_set_overlay(_weapons[weapon_id] as Node, _glow_material if _is_glowing else null)
+	if _is_glowing:
+		_glow_time += delta
+		var pulse: float = 0.65 + 0.35 * sin(_glow_time * TAU * empowered_glow_pulse_speed)
+		_glow_material.albedo_color = Color(empowered_glow_color, empowered_glow_color.a * pulse)
+
+
+func _set_overlay(node: Node, overlay: Material) -> void:
+	var geometry: GeometryInstance3D = node as GeometryInstance3D
+	if geometry != null:
+		geometry.material_overlay = overlay
+	for child in node.get_children():
+		_set_overlay(child, overlay)

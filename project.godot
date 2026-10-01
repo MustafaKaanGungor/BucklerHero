@@ -48,6 +48,7 @@ LoudnessManger="*uid://c5yrrfj6ogn4p"
 TotalLoudnessManager="*uid://bfgdhan307lot"
 MovementShieldCharge="*res://Scripts/Movement/MovementShieldCharge.gd"
 HealthManager="*res://Scripts/DataScripts/HealthManager.gd"
+ComboMeter="*res://Scripts/DataScripts/ComboMeter.gd"
 
 [display]
 
