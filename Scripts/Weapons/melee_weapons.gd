@@ -71,6 +71,8 @@ const METHOD_START_SHIELD_CARRY: StringName = &"start_shield_carry"
 const METHOD_END_SHIELD_CARRY: StringName = &"end_shield_carry"
 const METHOD_ON_SHIELD_CRUSH: StringName = &"on_shield_crush"
 const SwordWave = preload("res://Scripts/Weapons/sword_wave.gd")
+## The weapon selector (weapon_wheel.gd) joins this group; attacks wait while it is open.
+const GROUP_WEAPON_WHEEL: StringName = &"weapon_wheel"
 
 @export_group("Nodes")
 @export var player_path: NodePath = NodePath("../../..")
@@ -83,6 +85,8 @@ const SwordWave = preload("res://Scripts/Weapons/sword_wave.gd")
 @export_group("Equip")
 ## Weapon in hand when the player spawns: "broadsword", "halberd" or "shield".
 @export var starting_weapon: StringName = WEAPON_BROADSWORD
+## Order the next / previous weapon keys (Q, mouse wheel) step through. Wraps around.
+@export var weapon_order: Array[StringName] = [WEAPON_BROADSWORD, WEAPON_HALBERD, WEAPON_SHIELD]
 ## Seconds the weapon takes to rise into its idle pose.
 @export var equip_time: float = 0.18
 ## Offset from the idle pose where the rise starts. Negative Y is below the screen.
@@ -276,6 +280,9 @@ func _physics_process(delta: float) -> void:
 		equip(WEAPON_HALBERD)
 	elif InputManager.is_weapon_shield_just_pressed():
 		equip(WEAPON_SHIELD)
+	var cycle: int = InputManager.consume_weapon_cycle()
+	if cycle != 0:
+		cycle_weapon(cycle)
 
 	_update_recover_timers(delta)
 	_update_pending_impact(delta)
@@ -397,6 +404,18 @@ func equip(weapon_id: StringName) -> bool:
 	return true
 
 
+## Equips the weapon steps places after the current one in weapon_order (negative goes back),
+## wrapping around. Q and mouse wheel up step +1, mouse wheel down steps -1.
+func cycle_weapon(steps: int) -> bool:
+	if weapon_order.is_empty():
+		return false
+	var index: int = weapon_order.find(_equipped_weapon)
+	if index < 0:
+		index = 0
+	var next_index: int = posmod(index + steps, weapon_order.size())
+	return equip(weapon_order[next_index])
+
+
 ## Starts the equipped weapon's attack. Returns true if an attack started.
 func attack() -> bool:
 	if not can_attack():
@@ -456,7 +475,8 @@ func _update_attack_input(delta: float) -> void:
 	_mouse_was_captured = mouse_captured
 
 	_update_shield_press(delta)
-	if _is_weapon_blocked():
+	# The weapon selector only holds back new attacks; one already swinging finishes.
+	if _is_weapon_blocked() or _is_weapon_wheel_open():
 		_attack_buffer_timer = 0.0
 		_shield_press_pending = false
 		return
@@ -1036,8 +1056,11 @@ func _get_excluded_rids() -> Array[RID]:
 	if player != null:
 		excluded_rids.append(player.get_rid())
 	for enemy in _carried_enemies:
+		# Check before casting: casting a freed object is an error.
+		if not is_instance_valid(enemy):
+			continue
 		var enemy_body: CollisionObject3D = enemy as CollisionObject3D
-		if is_instance_valid(enemy) and enemy_body != null:
+		if enemy_body != null:
 			excluded_rids.append(enemy_body.get_rid())
 	return excluded_rids
 
@@ -1049,6 +1072,11 @@ func _is_weapon_blocked() -> bool:
 		or _player_bool(METHOD_IS_EDGE_HOLDING, false)
 		or _player_bool(METHOD_IS_EDGE_PULLING_OVER, false)
 	)
+
+
+func _is_weapon_wheel_open() -> bool:
+	var wheel: Node = get_tree().get_first_node_in_group(GROUP_WEAPON_WHEEL)
+	return wheel != null and wheel.has_method(&"is_open") and bool(wheel.call(&"is_open"))
 
 
 func _get_equipped_attack() -> MeleeAttackData:
@@ -1295,8 +1323,11 @@ func _update_dash_pass_through(delta: float) -> void:
 	if _dash_pass_timer > 0.0:
 		return
 	for enemy in _dash_passed_enemies:
+		# Enemies the lunge killed are already freed; casting a freed object is an error, so check first.
+		if not is_instance_valid(enemy) or player == null:
+			continue
 		var body: PhysicsBody3D = enemy as PhysicsBody3D
-		if body != null and is_instance_valid(body) and player != null:
+		if body != null:
 			player.remove_collision_exception_with(body)
 			body.remove_collision_exception_with(player)
 	_dash_passed_enemies.clear()

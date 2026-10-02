@@ -11,6 +11,7 @@
 [ext_resource type="Script" path="res://Scripts/UI/screen_flash.gd" id="9_screen_flash"]
 [ext_resource type="Script" path="res://Scripts/UI/hit_sound.gd" id="10_hit_sound"]
 [ext_resource type="Script" path="res://Scripts/UI/combo_meter_hud.gd" id="12_combo"]
+[ext_resource type="Script" path="res://Scripts/UI/weapon_wheel.gd" id="13_wheel"]
 [ext_resource type="Script" path="res://Scripts/UI/block_sound.gd" id="11_block_sound"]
 
 [node name="UI" type="CanvasLayer" unique_id=642302505]
@@ -159,6 +160,16 @@ grow_horizontal = 2
 grow_vertical = 0
 mouse_filter = 2
 script = ExtResource("12_combo")
+
+[node name="WeaponWheel" type="Control" parent="HudRoot"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("13_wheel")
 
 [node name="AmmoCounter" type="Label" parent="HudRoot"]
 layout_mode = 1

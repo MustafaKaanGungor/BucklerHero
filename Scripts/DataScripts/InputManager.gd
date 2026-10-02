@@ -13,6 +13,12 @@ const ACTION_ATTACK: StringName = &"attack"
 const ACTION_WEAPON_SWORD: StringName = &"weapon_sword"
 const ACTION_WEAPON_HALBERD: StringName = &"weapon_halberd"
 const ACTION_WEAPON_SHIELD: StringName = &"weapon_shield"
+## Q or mouse wheel up.
+const ACTION_WEAPON_NEXT: StringName = &"weapon_next"
+## Mouse wheel down.
+const ACTION_WEAPON_PREVIOUS: StringName = &"weapon_previous"
+## Middle mouse: hold to open the weapon selector.
+const ACTION_WEAPON_WHEEL: StringName = &"weapon_wheel"
 
 @export_group("Sprint Input")
 ## Enables normal hold-to-sprint using the move_sprint action.
@@ -27,6 +33,10 @@ const ACTION_WEAPON_SHIELD: StringName = &"weapon_shield"
 @export var sprint_forward_hold_threshold: float = 0.55
 
 var _forward_tap_timer: float = 0.0
+## Pending weapon cycle steps from next / previous presses (+1 next, -1 previous), read once by
+## consume_weapon_cycle(). Latched from events because a wheel "press" is released in the same
+## frame, and head.gd marks every pressed mouse button as handled.
+var _weapon_cycle_request: int = 0
 var _forward_sprint_active: bool = false
 var _hold_sprint_blocked_until_release: bool = false
 var _forward_sprint_blocked_until_release: bool = false
@@ -92,6 +102,26 @@ func is_attack_just_pressed() -> bool:
 
 func is_attack_pressed() -> bool:
 	return Input.is_action_pressed(ACTION_ATTACK)
+
+
+func _input(event: InputEvent) -> void:
+	if event.is_echo():
+		return
+	if event.is_action_pressed(ACTION_WEAPON_NEXT):
+		_weapon_cycle_request += 1
+	elif event.is_action_pressed(ACTION_WEAPON_PREVIOUS):
+		_weapon_cycle_request -= 1
+
+
+## Net weapon cycle steps requested since the last call (+ next, - previous), then clears them.
+func consume_weapon_cycle() -> int:
+	var request: int = _weapon_cycle_request
+	_weapon_cycle_request = 0
+	return request
+
+
+func is_weapon_wheel_pressed() -> bool:
+	return Input.is_action_pressed(ACTION_WEAPON_WHEEL)
 
 
 func is_weapon_sword_just_pressed() -> bool:
