@@ -69,6 +69,22 @@ const METHOD_GET_NAVIGATION_DIRECTION: StringName = &"get_navigation_direction"
 ## backing away this many seconds (cornered) — then it attacks anyway.
 @export var max_retreat_time_before_attacking: float = 1.5
 
+@export_group("Strafing")
+## Ranged enemies (preferred_min_distance > 0) sometimes side-step between attacks instead of
+## standing still. They keep facing the player and start no attack until the side-step ends.
+@export var enable_strafing: bool = true
+## Chance to side-step right after an attack's recover.
+@export_range(0.0, 1.0) var strafe_chance_after_attack: float = 0.6
+## Chance per second to start a side-step while holding position in range.
+@export var strafe_chance_per_second: float = 0.3
+## Shortest and longest side-step, in seconds.
+@export var strafe_duration_range: Vector2 = Vector2(0.6, 1.4)
+## Side-step speed as a share of move_speed.
+@export_range(0.0, 2.0) var strafe_speed_multiplier: float = 0.9
+## A wall closer than this on the chosen side flips the side-step the other way (or cancels it
+## if both sides are blocked).
+@export var strafe_wall_check_distance: float = 1.5
+
 @export_group("Attack")
 ## The enemy stops and starts an attack when the player is this close.
 @export var attack_range: float = 1.7
@@ -88,6 +104,22 @@ const METHOD_GET_NAVIGATION_DIRECTION: StringName = &"get_navigation_direction"
 @export var attack_recover_time: float = 0.75
 ## Turning speed multiplier during the windup, so sidestepping a strike is possible.
 @export_range(0.0, 1.0) var attack_windup_turn_multiplier: float = 0.25
+
+@export_group("Attack Telegraph")
+## The body glows during the windup, from start colour to end colour, brightest just before the
+## strike, then flashes strike_flash_color the moment the attack comes out.
+@export var windup_glow_start_color: Color = Color(1.0, 0.6, 0.1)
+@export var windup_glow_end_color: Color = Color(1.0, 0.08, 0.02)
+## Glow strength at the end of the windup (0..1).
+@export_range(0.0, 1.0) var windup_glow_max: float = 0.8
+## Higher keeps the glow faint longer and ramps it up late.
+@export var windup_glow_curve: float = 1.6
+## Flicker that speeds up toward the strike, as a share of the glow (0 = steady).
+@export_range(0.0, 1.0) var windup_glow_flicker: float = 0.3
+## Flash when the attack comes out.
+@export var strike_flash_color: Color = Color(1.0, 0.95, 0.85)
+@export var strike_flash_time: float = 0.15
+@export_range(0.0, 1.0) var strike_flash_strength: float = 1.0
 
 @export_group("Jumping")
 ## Lets the enemy jump onto boxes, platforms and raised floors it runs into while chasing.
@@ -131,6 +163,10 @@ var _retreat_timer: float = 0.0
 var _is_alerted: bool = false
 var _navigation: Node
 var _jump_cooldown_timer: float = 0.0
+var _strike_flash_timer: float = 0.0
+var _strafe_timer: float = 0.0
+var _strafe_side: float = 1.0
+var _telegraph_time: float = 0.0
 var _jump_assist_timer: float = 0.0
 var _jump_direction: Vector3 = Vector3.ZERO
 
@@ -150,6 +186,37 @@ func get_state() -> State:
 
 func is_attacking() -> bool:
 	return _state == State.WINDUP or _state == State.RECOVER
+
+
+## How far through its attack windup the enemy is, 0..1, or -1 when it isn't winding up.
+## The attack lands (or fires) at 1. Read by the off-screen threat indicators.
+func get_attack_telegraph() -> float:
+	if _state != State.WINDUP or _is_dead or _is_carried:
+		return -1.0
+	return clampf(1.0 - (_state_timer / maxf(attack_windup_time, 0.001)), 0.0, 1.0)
+
+
+## True for a moment right after the attack came out (the strike flash).
+func is_striking() -> bool:
+	return _strike_flash_timer > 0.0
+
+
+## Windup glow and strike flash; see the Attack Telegraph exports.
+func _get_telegraph_glow(delta: float) -> Color:
+	_strike_flash_timer = maxf(_strike_flash_timer - delta, 0.0)
+	if _strike_flash_timer > 0.0:
+		var fade: float = _strike_flash_timer / maxf(strike_flash_time, 0.001)
+		return Color(strike_flash_color, strike_flash_strength * fade)
+	var progress: float = get_attack_telegraph()
+	if progress < 0.0:
+		_telegraph_time = 0.0
+		return Color(0.0, 0.0, 0.0, 0.0)
+	_telegraph_time += delta
+	var strength: float = pow(progress, maxf(windup_glow_curve, 0.001)) * windup_glow_max
+	var flicker_speed: float = lerpf(5.0, 20.0, progress)
+	var flicker: float = 0.5 + 0.5 * sin(_telegraph_time * flicker_speed * TAU)
+	strength *= 1.0 - windup_glow_flicker * flicker * progress
+	return Color(windup_glow_start_color.lerp(windup_glow_end_color, progress), strength)
 
 
 ## Makes the enemy hunt the player right away and keep hunting: it never goes back to idle because
@@ -311,18 +378,22 @@ func _update_state() -> void:
 		State.CHASE:
 			if not _has_living_target() or (not _is_alerted and _get_target_distance() > lose_range):
 				_set_state(State.IDLE)
-			elif _is_target_in_attack_range(attack_range) and (not attack_requires_line_of_sight or _has_line_of_sight()) and _may_attack_while_close():
+			elif _strafe_timer <= 0.0 and _is_target_in_attack_range(attack_range) and (not attack_requires_line_of_sight or _has_line_of_sight()) and _may_attack_while_close():
 				_set_state(State.WINDUP, attack_windup_time)
 				_on_windup_started()
 				attack_started.emit()
 		State.WINDUP:
 			if _state_timer <= 0.0:
+				_strike_flash_timer = maxf(strike_flash_time, 0.0)
 				attack_struck.emit()
 				_strike()
 				_set_state(State.RECOVER, attack_recover_time)
 		State.RECOVER, State.STAGGER:
 			if _state_timer <= 0.0:
+				var after_attack: bool = _state == State.RECOVER
 				_set_state(State.CHASE if _has_living_target() else State.IDLE)
+				if after_attack and _can_strafe() and randf() < strafe_chance_after_attack:
+					_start_strafe()
 
 
 func _set_state(new_state: State, duration: float = 0.0) -> void:
@@ -337,6 +408,7 @@ func _start_stagger(duration: float) -> void:
 	# A longer stagger already running is kept.
 	if _state == State.STAGGER and _state_timer >= duration:
 		return
+	_strafe_timer = 0.0
 	_set_state(State.STAGGER, duration)
 
 
@@ -405,11 +477,51 @@ func _get_chase_velocity() -> Vector3:
 	if preferred_min_distance > 0.0:
 		var distance: float = _get_target_distance()
 		var in_range: bool = distance <= attack_range * ranged_approach_ratio
+		var holding: bool = false
 		if distance < preferred_min_distance:
 			chase_velocity = -direction * maxf(move_speed, 0.0) * retreat_speed_multiplier
 		elif in_range and (not attack_requires_line_of_sight or _has_line_of_sight()):
 			chase_velocity = Vector3.ZERO
+			holding = true
+		if holding and _strafe_timer <= 0.0 and _can_strafe() and randf() < strafe_chance_per_second * get_physics_process_delta_time():
+			_start_strafe()
+		chase_velocity += _get_strafe_velocity(direction)
 	return chase_velocity + _get_separation_velocity()
+
+
+func _can_strafe() -> bool:
+	return enable_strafing and preferred_min_distance > 0.0 and not _is_dead and not _is_carried
+
+
+func _start_strafe() -> void:
+	_strafe_timer = randf_range(strafe_duration_range.x, maxf(strafe_duration_range.y, strafe_duration_range.x))
+	_strafe_side = 1.0 if randf() < 0.5 else -1.0
+
+
+## Sideways velocity while a side-step runs (ticks its timer). Flips away from a wall on the chosen
+## side, and ends the side-step if both sides are blocked.
+func _get_strafe_velocity(direction_to_target: Vector3) -> Vector3:
+	if _strafe_timer <= 0.0:
+		return Vector3.ZERO
+	_strafe_timer = maxf(_strafe_timer - get_physics_process_delta_time(), 0.0)
+	if direction_to_target == Vector3.ZERO:
+		return Vector3.ZERO
+	var side: Vector3 = direction_to_target.cross(Vector3.UP).normalized() * _strafe_side
+	if _is_side_blocked(side):
+		_strafe_side = -_strafe_side
+		side = -side
+		if _is_side_blocked(side):
+			_strafe_timer = 0.0
+			return Vector3.ZERO
+	return side * maxf(move_speed, 0.0) * maxf(strafe_speed_multiplier, 0.0)
+
+
+func _is_side_blocked(side: Vector3) -> bool:
+	var from: Vector3 = global_position + Vector3.UP * sight_height
+	var query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(from, from + side * maxf(strafe_wall_check_distance, 0.0), sight_collision_mask)
+	var excluded: Array[RID] = [get_rid()]
+	query.exclude = excluded
+	return not get_world_3d().direct_space_state.intersect_ray(query).is_empty()
 
 
 ## Which way to walk to reach the player: the level's path around walls when there is a

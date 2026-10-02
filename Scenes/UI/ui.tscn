@@ -12,6 +12,8 @@
 [ext_resource type="Script" path="res://Scripts/UI/hit_sound.gd" id="10_hit_sound"]
 [ext_resource type="Script" path="res://Scripts/UI/combo_meter_hud.gd" id="12_combo"]
 [ext_resource type="Script" path="res://Scripts/UI/weapon_wheel.gd" id="13_wheel"]
+[ext_resource type="Script" path="res://Scripts/UI/threat_indicators.gd" id="14_threats"]
+[ext_resource type="Script" path="res://Scripts/UI/end_screen.gd" id="15_death"]
 [ext_resource type="Script" path="res://Scripts/UI/block_sound.gd" id="11_block_sound"]
 
 [node name="UI" type="CanvasLayer" unique_id=642302505]
@@ -161,6 +163,16 @@ grow_vertical = 0
 mouse_filter = 2
 script = ExtResource("12_combo")
 
+[node name="ThreatIndicators" type="Control" parent="HudRoot"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("14_threats")
+
 [node name="WeaponWheel" type="Control" parent="HudRoot"]
 layout_mode = 1
 anchors_preset = 15
@@ -198,3 +210,37 @@ script = ExtResource("10_hit_sound")
 
 [node name="BlockSound" type="AudioStreamPlayer" parent="."]
 script = ExtResource("11_block_sound")
+
+[node name="DeathScreen" type="Control" parent="HudRoot"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("15_death")
+
+[node name="VictoryScreen" type="Control" parent="HudRoot"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("15_death")
+kind = 1
+intro_time_scale = 0.35
+intro_time = 2.0
+title_text = "VICTORY"
+title_color = Color(1, 0.78, 0.25, 1)
+prompt_text = "CLICK OR PRESS SPACE TO PLAY AGAIN"
+subtitles = Array[String](["The arenas fall silent.", "Every wave broken.", "The steel outlasted them all.", "Not one combo wasted."])
+overlay_tint = Color(0.9, 0.62, 0.2, 1)
+overlay_desaturate = 0.45
+overlay_tint_strength = 0.5
+overlay_darken = 0.1
+overlay_vignette_darken = 0.4

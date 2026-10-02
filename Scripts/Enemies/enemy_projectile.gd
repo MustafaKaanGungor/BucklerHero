@@ -11,6 +11,8 @@ extends Node3D
 const GROUP_ENEMIES: StringName = &"enemies"
 const GROUP_PLAYER: StringName = &"player"
 const METHOD_TAKE_DAMAGE: StringName = &"take_damage"
+## Every live enemy projectile is in this group, so a level restart can clear the ones in flight.
+const GROUP_ENEMY_PROJECTILES: StringName = &"enemy_projectiles"
 const SoundSynth = preload("res://Scripts/Audio/sound_synth.gd")
 
 @export_group("Flight")
@@ -56,6 +58,10 @@ var _has_finished: bool = false
 ## Synthesized once, shared by all projectiles.
 static var _explosion_sound: AudioStreamWAV
 static var _impact_sound: AudioStreamWAV
+
+
+func _ready() -> void:
+	add_to_group(GROUP_ENEMY_PROJECTILES)
 
 
 ## Places the projectile and starts it moving. Call after it is added to the scene tree.

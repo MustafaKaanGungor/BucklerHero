@@ -43,6 +43,8 @@ const GROUP_ENEMIES: StringName = &"enemies"
 @export var hit_flash_color: Color = Color(1.0, 1.0, 1.0, 1.0)
 ## Seconds the hit flash takes to fade.
 @export var hit_flash_time: float = 0.18
+## Glow strength of the attack telegraph (see _get_telegraph_glow), as emission energy.
+@export var telegraph_emission_energy: float = 3.0
 
 @export_group("Fragments")
 ## Pieces the dummy breaks into when it dies. 0 disables the breaking effect.
@@ -78,6 +80,8 @@ var _is_carried: bool = false
 var _carrier: PhysicsBody3D
 var _respawn_timer: float = 0.0
 var _flash_amount: float = 0.0
+## Last telegraph glow applied (rgb colour, alpha strength), so it can be cleared when it ends.
+var _telegraph_glow: Color = Color(0.0, 0.0, 0.0, 0.0)
 var _materials: Array[StandardMaterial3D] = []
 var _base_colors: Array[Color] = []
 var _last_hit_direction: Vector3 = Vector3.ZERO
@@ -129,11 +133,19 @@ func _update_horizontal_velocity(delta: float) -> void:
 
 
 func _process(delta: float) -> void:
-	if _flash_amount <= 0.0:
+	var glow: Color = Color(0.0, 0.0, 0.0, 0.0) if _is_dead else _get_telegraph_glow(delta)
+	if _flash_amount <= 0.0 and glow.a <= 0.0 and _telegraph_glow.a <= 0.0:
 		return
 
 	_flash_amount = maxf(_flash_amount - (delta / maxf(hit_flash_time, 0.001)), 0.0)
+	_telegraph_glow = glow
 	_apply_flash()
+
+
+## Glow for attack telegraphs: rgb is the colour, alpha the strength (0 = none). The dummy never
+## attacks; melee_enemy.gd overrides this to light up during its windup and flash on the strike.
+func _get_telegraph_glow(_delta: float) -> Color:
+	return Color(0.0, 0.0, 0.0, 0.0)
 
 
 func get_health() -> float:
@@ -396,11 +408,18 @@ func _cache_materials() -> void:
 		if source_material == null:
 			continue
 		var material: StandardMaterial3D = source_material.duplicate() as StandardMaterial3D
+		# Emission carries the attack telegraph glow; black (off) until an attack is wound up.
+		material.emission_enabled = true
+		material.emission = Color.BLACK
+		material.emission_energy_multiplier = maxf(telegraph_emission_energy, 0.0)
 		mesh_instance.set_surface_override_material(0, material)
 		_materials.append(material)
 		_base_colors.append(material.albedo_color)
 
 
 func _apply_flash() -> void:
+	var glow_strength: float = clampf(_telegraph_glow.a, 0.0, 1.0)
+	var glow: Color = Color(_telegraph_glow.r, _telegraph_glow.g, _telegraph_glow.b) * glow_strength
 	for index in range(_materials.size()):
 		_materials[index].albedo_color = _base_colors[index].lerp(hit_flash_color, clampf(_flash_amount, 0.0, 1.0))
+		_materials[index].emission = glow

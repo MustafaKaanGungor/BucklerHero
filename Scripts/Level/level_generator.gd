@@ -11,6 +11,10 @@ extends "res://Scripts/main.gd"
 
 signal level_generated(level_number: int, level_seed: int)
 signal level_completed(level_number: int)
+## The run started over from the first level (after the death or victory screen).
+signal run_restarted
+## The final level was finished; the victory screen takes over (it calls restart_run()).
+signal run_won
 
 const LevelLayout = preload("res://Scripts/Level/level_layout.gd")
 const LevelSection = preload("res://Scripts/Level/level_section.gd")
@@ -28,6 +32,9 @@ const WALL_TEXTURE: Texture2D = preload("res://Assets/images (1).jpg")
 @export var arena_count: int = 4
 ## Starting level number. Each finished level adds one, which raises every enemy budget.
 @export var level_number: int = 1
+## Finishing this level (stepping on its exit pad after the last corridor) wins the run and shows
+## the victory screen instead of building the next level. 0 = endless.
+@export var final_level: int = 2
 
 @export_group("Geometry")
 ## Size of one layout tile in metres. Corridors are one or two tiles wide.
@@ -193,12 +200,62 @@ var _floor_materials: Dictionary = {}
 var _navigation_target_cell: Vector2i = Vector2i(2147483647, 0)
 var _navigation_field: Dictionary = {}
 var _corridors_without_pack: int = 0
+var _start_level_number: int = 1
+var _run_kills: int = 0
+var _run_time: float = 0.0
+var _best_rank: int = -1
+var _is_run_won: bool = false
 
 
 func _ready() -> void:
 	add_to_group(GROUP_LEVEL_NAVIGATION)
+	_start_level_number = level_number
+	ComboMeter.rank_changed.connect(_on_combo_rank_changed)
 	generate_level()
 	super._ready()
+
+
+func _process(delta: float) -> void:
+	if not HealthManager.is_dead() and not _is_run_won:
+		_run_time += delta
+
+
+## Starts the whole run again: back to the starting level (a new layout when level_seed is 0),
+## first corridor, with health, stamina, combo meter and loudness reset. Called by the death screen.
+func restart_run() -> void:
+	level_number = _start_level_number
+	_is_run_won = false
+	for projectile in get_tree().get_nodes_in_group(&"enemy_projectiles"):
+		projectile.queue_free()
+	generate_level()
+	_run_kills = 0
+	_run_time = 0.0
+	_best_rank = -1
+	if player != null and is_instance_valid(player):
+		player.set_physics_process(true)
+		if player.has_method(&"stop_shield_charge"):
+			player.call(&"stop_shield_charge")
+		player.velocity = Vector3.ZERO
+		spawn_player()
+		player.reset_physics_interpolation()
+	HealthManager.reset_health()
+	StaminaManager.reset_stamina()
+	ComboMeter.reset()
+	LoudnessManger.reset_loudness()
+	TotalLoudnessManager.reset_total_loudness()
+	InputManager.reset_movement_state()
+	run_restarted.emit()
+
+
+## What the death screen shows: level, section label, kills, best combo rank letter, time (s).
+func get_run_summary() -> Dictionary:
+	return {
+		"level": level_number,
+		"section": _get_section_label(_current_section if _current_section != null else (_sections[0] if not _sections.is_empty() else null)),
+		"kills": _run_kills,
+		"best_rank": ComboMeter.get_rank_letter(_best_rank) if _best_rank >= 0 else "-",
+		"time": _run_time,
+	}
 
 
 ## Throws away the current level (if any) and builds a new one for level_number.
@@ -261,13 +318,9 @@ func get_hud_text() -> String:
 		if _sections.is_empty():
 			return ""
 		section = _sections[0]
-	var kind: int = int(section.get(&"kind"))
-	if kind == LevelLayout.Kind.EXIT:
+	if int(section.get(&"kind")) == LevelLayout.Kind.EXIT:
 		return "LEVEL %d COMPLETE" % level_number
-	var label: String = "CORRIDOR %d/%d" % [int(section.get(&"kind_number")), arena_count + 1]
-	if kind == LevelLayout.Kind.ARENA:
-		label = "ARENA %d/%d" % [int(section.get(&"kind_number")), arena_count]
-	var text: String = "LEVEL %d  ·  %s" % [level_number, label]
+	var text: String = "LEVEL %d  ·  %s" % [level_number, _get_section_label(section)]
 	if bool(section.call(&"is_cleared")):
 		return text + "  ·  CLEARED, MOVE ON"
 	if not bool(section.call(&"is_active")):
@@ -331,12 +384,47 @@ func get_navigation_direction(from: Vector3, to: Vector3) -> Vector3:
 	return direction.normalized()
 
 
-## Death puts the player back one tile inside the section they died in and restarts its waves.
+## The last level is done: the player stops where they stand and the victory screen shows.
+func _win_run() -> void:
+	_is_run_won = true
+	level_completed.emit(level_number)
+	if player != null and is_instance_valid(player):
+		if player.has_method(&"stop_shield_charge"):
+			player.call(&"stop_shield_charge")
+		player.velocity = Vector3.ZERO
+		player.set_physics_process(false)
+	run_won.emit()
+
+
+## Death ends the run: the player freezes where they fell and the death screen
+## (Scripts/UI/death_screen.gd) takes over; it calls restart_run() when the player continues.
+## Unlike main.gd, nothing is reset here.
 func _on_player_died() -> void:
-	if _current_section != null and is_instance_valid(_current_section):
-		_current_section.call(&"reset_section")
-		_place_spawn_marker(_current_section.call(&"get_respawn_cell"), _current_section.get(&"entry_direction"))
-	super._on_player_died()
+	if player == null or not is_instance_valid(player):
+		return
+	if player.has_method(&"stop_shield_charge"):
+		player.call(&"stop_shield_charge")
+	player.velocity = Vector3.ZERO
+	player.set_physics_process(false)
+
+
+func _on_combo_rank_changed(rank: int, _previous_rank: int) -> void:
+	_best_rank = maxi(_best_rank, rank)
+
+
+func _on_enemy_killed(_section: Node3D) -> void:
+	_run_kills += 1
+
+
+func _get_section_label(section: Node3D) -> String:
+	if section == null or not is_instance_valid(section):
+		return ""
+	var kind: int = int(section.get(&"kind"))
+	if kind == LevelLayout.Kind.ARENA:
+		return "ARENA %d/%d" % [int(section.get(&"kind_number")), arena_count]
+	if kind == LevelLayout.Kind.EXIT:
+		return "EXIT"
+	return "CORRIDOR %d/%d" % [int(section.get(&"kind_number")), arena_count + 1]
 
 
 func _on_section_activated(section: Node3D) -> void:
@@ -345,8 +433,16 @@ func _on_section_activated(section: Node3D) -> void:
 		_complete_level.call_deferred()
 
 
+## True from finishing the final level until the run restarts.
+func is_run_won() -> bool:
+	return _is_run_won
+
+
 func _complete_level() -> void:
-	if _is_completing:
+	if _is_completing or _is_run_won:
+		return
+	if final_level > 0 and level_number >= final_level:
+		_win_run()
 		return
 	_is_completing = true
 	level_completed.emit(level_number)
@@ -572,6 +668,7 @@ func _build_sections() -> void:
 
 		section.call(&"setup", self, spawner)
 		section.connect(&"section_activated", _on_section_activated)
+		section.connect(&"enemy_killed", _on_enemy_killed)
 		_sections.append(section)
 		_place_health_packs(section, section_data)
 

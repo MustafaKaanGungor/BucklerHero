@@ -11,9 +11,9 @@
 script = ExtResource("4_attack")
 windup_time = 0.14
 strike_time = 0.21
-recover_time = 1.0
+recover_time = 0.9
 hit_area = 0
-reach = 2.7
+reach = 3.3
 arc_degrees = 150.0
 arc_height = 1.1
 ray_spacing_degrees = 5.0
@@ -65,10 +65,10 @@ hit_screen_shake = 0.5
 damage = 1.0
 physics_impulse = 12.0
 impulse_direction = Vector3(0, 0.25, -1)
-windup_position = Vector3(0.03, -0.02, 0.1)
-windup_rotation_degrees = Vector3(0, 6, 0)
-strike_position = Vector3(0.2, 0.1, -0.3)
-strike_rotation_degrees = Vector3(10, -32, 4)
+windup_position = Vector3(-0.03, -0.02, 0.1)
+windup_rotation_degrees = Vector3(0, -6, 0)
+strike_position = Vector3(-0.2, 0.1, -0.3)
+strike_rotation_degrees = Vector3(10, 32, -4)
 camera_kick_rotation_degrees = Vector3(0.8, 0, 0)
 
 [sub_resource type="Resource" id="Resource_shield_charge_attack"]
@@ -149,7 +149,7 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.045, 0.72, 0)
 mesh = SubResource("BoxMesh_hook")
 
 [node name="Shield" type="Node3D" parent="."]
-transform = Transform3D(0.8398, -0.01858, 0.54258, -0.13504, 0.96085, 0.24192, -0.52584, -0.27644, 0.80441, -0.25, -0.24, -0.45)
+transform = Transform3D(0.8398, 0.01858, -0.54258, 0.13504, 0.96085, 0.24192, 0.52584, -0.27644, 0.80441, 0.25, -0.24, -0.45)
 
 [node name="Model" parent="Shield" instance=ExtResource("3_shield")]
 transform = Transform3D(0.8, 0, 0, 0, 0, 0.8, 0, -0.8, 0, 0, 0, 0)

@@ -12,6 +12,8 @@ extends Node3D
 signal section_activated(section: Node3D)
 signal wave_started(section: Node3D, wave_index: int, enemy_count: int)
 signal section_cleared(section: Node3D)
+## One of this section's enemies died (for run stats).
+signal enemy_killed(section: Node3D)
 
 enum Phase {
 	WAITING,
@@ -213,6 +215,8 @@ func _spawn_wave(wave_index: int) -> void:
 	for enemy in spawned:
 		if enemy.has_method(METHOD_ALERT):
 			enemy.call(METHOD_ALERT)
+		if enemy.has_signal(&"died"):
+			enemy.connect(&"died", func() -> void: enemy_killed.emit(self))
 		_wave_enemies.append(enemy)
 		_current_wave.append(enemy)
 	_current_wave_size = spawned.size()

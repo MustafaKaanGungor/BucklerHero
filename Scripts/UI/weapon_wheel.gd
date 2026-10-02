@@ -49,6 +49,7 @@ const GROUP_PLAYER_MELEE: StringName = &"player_melee"
 @export var tick_volume_db: float = -14.0
 
 var _is_open: bool = false
+var _is_restoring_time: bool = false
 var _pointer: Vector2 = Vector2.ZERO
 var _highlighted: int = -1
 var _alpha: float = 0.0
@@ -98,8 +99,13 @@ func _process(delta: float) -> void:
 	elif not wants_open and _is_open:
 		_close(true)
 
-	var target_scale: float = wheel_time_scale if _is_open else 1.0
-	Engine.time_scale = move_toward(Engine.time_scale, target_scale, real_delta / maxf(time_scale_blend_time, 0.001))
+	# Only touch the game speed while open or easing back afterwards, so other slow-motion
+	# (the death screen) isn't fought every frame.
+	if _is_open or _is_restoring_time:
+		var target_scale: float = wheel_time_scale if _is_open else 1.0
+		Engine.time_scale = move_toward(Engine.time_scale, target_scale, real_delta / maxf(time_scale_blend_time, 0.001))
+		if not _is_open and is_equal_approx(Engine.time_scale, 1.0):
+			_is_restoring_time = false
 	_alpha = move_toward(_alpha, 1.0 if _is_open else 0.0, real_delta / maxf(fade_time, 0.001))
 	modulate.a = _alpha
 
@@ -134,7 +140,11 @@ func _close(equip: bool) -> void:
 		if weapons != null:
 			weapons.call(&"equip", picked)
 	_highlighted = -1
-	if not equip:
+	if equip:
+		_is_restoring_time = true
+	else:
+		# Closed by death: hand the game speed straight back (the death screen takes over).
+		_is_restoring_time = false
 		Engine.time_scale = 1.0
 	closed.emit(picked)
 

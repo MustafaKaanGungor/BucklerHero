@@ -118,9 +118,9 @@ const GROUP_WEAPON_WHEEL: StringName = &"weapon_wheel"
 ## The charge only hits things while the player is at least this fast.
 @export var shield_charge_min_hit_speed: float = 5.0
 ## Offset from the idle pose while the shield is braced in front.
-@export var shield_brace_position: Vector3 = Vector3(0.25, 0.05, -0.08)
+@export var shield_brace_position: Vector3 = Vector3(-0.25, 0.05, -0.08)
 ## Rotation added to the idle pose while braced, turning the shield to face straight ahead.
-@export var shield_brace_rotation_degrees: Vector3 = Vector3(12.0, -34.0, 6.0)
+@export var shield_brace_rotation_degrees: Vector3 = Vector3(12.0, 34.0, -6.0)
 ## How quickly the shield moves into and out of the braced pose.
 @export var shield_brace_lerp_speed: float = 12.0
 ## Up-and-down shake of the braced shield at full charge speed.
@@ -186,7 +186,7 @@ const GROUP_WEAPON_WHEEL: StringName = &"weapon_wheel"
 @export var empowered_rank: int = 4
 ## Broadsword: each swing also launches a slash wave that flies ahead and cuts through enemies.
 ## Damage of each wave hit.
-@export var sword_wave_damage: float = 1.0
+@export var sword_wave_damage: float = 3.0
 ## Wave speed (m/s), range (m) and width (m).
 @export var sword_wave_speed: float = 28.0
 @export var sword_wave_range: float = 22.0
@@ -475,8 +475,8 @@ func _update_attack_input(delta: float) -> void:
 	_mouse_was_captured = mouse_captured
 
 	_update_shield_press(delta)
-	# The weapon selector only holds back new attacks; one already swinging finishes.
-	if _is_weapon_blocked() or _is_weapon_wheel_open():
+	# The weapon selector only holds back new attacks; one already swinging finishes. The dead don't attack.
+	if _is_weapon_blocked() or _is_weapon_wheel_open() or HealthManager.is_dead():
 		_attack_buffer_timer = 0.0
 		_shield_press_pending = false
 		return
