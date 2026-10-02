@@ -66,6 +66,9 @@ var _alpha: float = 0.0
 var _pop_tween: Tween
 var _shake_time: float = 0.0
 var _rank_up_player: AudioStreamPlayer
+var _message: Label
+var _message_time: float = 0.0
+var _weapons: Node
 var _s_rank_player: AudioStreamPlayer
 
 
@@ -107,6 +110,16 @@ func _ready() -> void:
 
 	modulate.a = 0.0
 	ComboMeter.rank_changed.connect(_on_rank_changed)
+	# The crossbow's "no combo" warning lives outside this control, which fades out when empty.
+	_message = Label.new()
+	_message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_message.add_theme_font_size_override(&"font_size", 30)
+	_message.add_theme_color_override(&"font_color", Color(1.0, 0.3, 0.2))
+	_message.add_theme_color_override(&"font_outline_color", Color(0.0, 0.0, 0.0, 0.85))
+	_message.add_theme_constant_override(&"outline_size", 8)
+	_message.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_message.modulate.a = 0.0
+	get_parent().add_child.call_deferred(_message)
 	resized.connect(_layout)
 	_layout()
 
@@ -122,7 +135,23 @@ func _layout() -> void:
 	_bar_back.size = bar_size
 
 
+## Flashes a short warning above the meter (the crossbow fired with an empty meter).
+func show_message(text: String) -> void:
+	_message.text = text
+	_message_time = 1.0
+
+
 func _process(delta: float) -> void:
+	if _weapons == null or not is_instance_valid(_weapons):
+		_weapons = get_tree().get_first_node_in_group(&"player_melee")
+		if _weapons != null and _weapons.has_signal(&"crossbow_dry_fired"):
+			_weapons.connect(&"crossbow_dry_fired", show_message.bind("NEED COMBO"))
+	if _message.is_inside_tree():
+		_message.size = Vector2(size.x, 40.0)
+		_message.global_position = global_position + Vector2(0.0, size.y * 0.35)
+		_message_time = maxf(_message_time - delta / maxf(Engine.time_scale, 0.001), 0.0)
+		_message.modulate.a = clampf(_message_time / 0.3, 0.0, 1.0)
+		_message.position.x += sin(_message_time * 60.0) * 6.0 * _message_time
 	var rank: int = ComboMeter.get_rank()
 	var target_alpha: float = 1.0 if rank >= 0 else 0.0
 	_alpha = move_toward(_alpha, target_alpha, delta / maxf(fade_time, 0.01))

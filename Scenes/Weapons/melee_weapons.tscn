@@ -84,6 +84,21 @@ impulse_direction = Vector3(0, 0.3, -1)
 swing_loudness = 0.0
 hit_loudness = 22.0
 
+[sub_resource type="Resource" id="Resource_crossbow_attack"]
+script = ExtResource("4_attack")
+windup_time = 0.05
+strike_time = 0.06
+recover_time = 1.0
+hit_area = 1
+reach = 0.01
+damage = 0.0
+physics_impulse = 0.0
+swing_loudness = 12.0
+hit_loudness = 18.0
+strike_position = Vector3(0, 0.03, 0.14)
+strike_rotation_degrees = Vector3(9, 0, 0)
+camera_kick_rotation_degrees = Vector3(1.6, 0, 0)
+
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_shaft"]
 albedo_color = Color(0.36, 0.36, 0.38, 1)
 roughness = 0.85
@@ -112,12 +127,37 @@ size = Vector3(0.016, 0.2, 0.012)
 material = SubResource("StandardMaterial3D_steel")
 size = Vector3(0.07, 0.045, 0.012)
 
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_wood"]
+albedo_color = Color(0.42, 0.28, 0.16, 1)
+roughness = 0.8
+
+[sub_resource type="BoxMesh" id="BoxMesh_crossbow_stock"]
+material = SubResource("StandardMaterial3D_wood")
+size = Vector3(0.05, 0.06, 0.55)
+
+[sub_resource type="BoxMesh" id="BoxMesh_crossbow_grip"]
+material = SubResource("StandardMaterial3D_wood")
+size = Vector3(0.04, 0.13, 0.05)
+
+[sub_resource type="BoxMesh" id="BoxMesh_crossbow_limb"]
+material = SubResource("StandardMaterial3D_steel")
+size = Vector3(0.27, 0.025, 0.035)
+
+[sub_resource type="BoxMesh" id="BoxMesh_crossbow_string"]
+material = SubResource("StandardMaterial3D_shaft")
+size = Vector3(0.5, 0.008, 0.008)
+
+[sub_resource type="BoxMesh" id="BoxMesh_crossbow_bolt"]
+material = SubResource("StandardMaterial3D_steel")
+size = Vector3(0.015, 0.015, 0.5)
+
 [node name="MeleeWeapons" type="Node3D"]
 script = ExtResource("1_melee")
 broadsword_attack = SubResource("Resource_broadsword_attack")
 halberd_attack = SubResource("Resource_halberd_attack")
 shield_attack = SubResource("Resource_shield_attack")
 shield_charge_attack = SubResource("Resource_shield_charge_attack")
+crossbow_attack = SubResource("Resource_crossbow_attack")
 
 [node name="Broadsword" type="Node3D" parent="."]
 transform = Transform3D(0.91769, -0.06564, -0.39184, 0.22431, 0.89964, 0.37461, 0.32793, -0.43166, 0.84031, 0.2, -0.3, -0.42)
@@ -153,6 +193,34 @@ transform = Transform3D(0.8398, 0.01858, -0.54258, 0.13504, 0.96085, 0.24192, 0.
 
 [node name="Model" parent="Shield" instance=ExtResource("3_shield")]
 transform = Transform3D(0.8, 0, 0, 0, 0, 0.8, 0, -0.8, 0, 0, 0, 0)
+
+[node name="Crossbow" type="Node3D" parent="."]
+visible = false
+transform = Transform3D(0.9945, 0, 0.1045, 0, 1, 0, -0.1045, 0, 0.9945, 0.2, -0.24, -0.5)
+
+[node name="Stock" type="MeshInstance3D" parent="Crossbow"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0.05)
+mesh = SubResource("BoxMesh_crossbow_stock")
+
+[node name="Grip" type="MeshInstance3D" parent="Crossbow"]
+transform = Transform3D(1, 0, 0, 0, 0.94, 0.342, 0, -0.342, 0.94, 0, -0.08, 0.2)
+mesh = SubResource("BoxMesh_crossbow_grip")
+
+[node name="LimbLeft" type="MeshInstance3D" parent="Crossbow"]
+transform = Transform3D(0.978, 0, 0.208, 0, 1, 0, -0.208, 0, 0.978, -0.13, 0.01, -0.2)
+mesh = SubResource("BoxMesh_crossbow_limb")
+
+[node name="LimbRight" type="MeshInstance3D" parent="Crossbow"]
+transform = Transform3D(0.978, 0, -0.208, 0, 1, 0, 0.208, 0, 0.978, 0.13, 0.01, -0.2)
+mesh = SubResource("BoxMesh_crossbow_limb")
+
+[node name="String" type="MeshInstance3D" parent="Crossbow"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.01, -0.13)
+mesh = SubResource("BoxMesh_crossbow_string")
+
+[node name="LoadedBolt" type="MeshInstance3D" parent="Crossbow"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.045, -0.08)
+mesh = SubResource("BoxMesh_crossbow_bolt")
 
 [node name="Audio" type="Node" parent="."]
 script = ExtResource("5_audio")

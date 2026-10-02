@@ -17,6 +17,12 @@ const ACTION_WEAPON_SHIELD: StringName = &"weapon_shield"
 const ACTION_WEAPON_NEXT: StringName = &"weapon_next"
 ## Mouse wheel down.
 const ACTION_WEAPON_PREVIOUS: StringName = &"weapon_previous"
+## Number keys 1-9 pick loadout slots 1-9. The first three keep their old names.
+const WEAPON_SLOT_ACTIONS: Array[StringName] = [
+	&"weapon_sword", &"weapon_halberd", &"weapon_shield",
+	&"weapon_slot_4", &"weapon_slot_5", &"weapon_slot_6",
+	&"weapon_slot_7", &"weapon_slot_8", &"weapon_slot_9",
+]
 ## Middle mouse: hold to open the weapon selector.
 const ACTION_WEAPON_WHEEL: StringName = &"weapon_wheel"
 
@@ -118,6 +124,14 @@ func consume_weapon_cycle() -> int:
 	var request: int = _weapon_cycle_request
 	_weapon_cycle_request = 0
 	return request
+
+
+## 0-based loadout slot whose number key was just pressed (1 → 0 … 9 → 8), or -1.
+func get_weapon_slot_just_pressed() -> int:
+	for index in range(WEAPON_SLOT_ACTIONS.size()):
+		if Input.is_action_just_pressed(WEAPON_SLOT_ACTIONS[index]):
+			return index
+	return -1
 
 
 func is_weapon_wheel_pressed() -> bool:

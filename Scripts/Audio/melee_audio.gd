@@ -65,6 +65,18 @@ func _ready() -> void:
 	rumble = SoundSynth.mix(rumble, SoundSynth.whoosh(0.8, 150.0, 600.0, 250.0, 0.3, 1.5, 47), 0.8)
 	_add_sound(&"empowered_shield", rumble, swing_volume_db + 4.0)
 
+	# Crossbow: a string twang on firing, a wooden thunk on hits, a rising whine for the S-rank
+	# explosive shot, and a dry click when the combo meter is empty.
+	var twang: PackedFloat32Array = SoundSynth.tone_sweep(0.3, 190.0, 150.0, 0.01, 18.0, 81)
+	twang = SoundSynth.mix(twang, SoundSynth.thud(0.12, 400.0, 180.0, 40.0, 1.4, 60.0, 0.85, 82), 0.8)
+	twang = SoundSynth.mix(twang, SoundSynth.whoosh(0.18, 1200.0, 3500.0, 1800.0, 0.2, 2.0, 83), 0.5, 0.01)
+	_add_sound(&"swing_crossbow", twang, swing_volume_db + 3.0)
+	_add_sound(&"hit_crossbow", SoundSynth.thud(0.16, 260.0, 110.0, 26.0, 1.3, 40.0, 0.7, 84), hit_volume_db + 1.0)
+	var whine: PackedFloat32Array = SoundSynth.tone_sweep(0.5, 600.0, 1800.0, 0.4, 14.0, 85)
+	whine = SoundSynth.mix(whine, SoundSynth.whoosh(0.5, 400.0, 2500.0, 1500.0, 0.8, 1.6, 86), 0.7)
+	_add_sound(&"empowered_crossbow", whine, swing_volume_db + 2.0)
+	_add_sound(&"dry_crossbow", SoundSynth.thud(0.07, 900.0, 600.0, 70.0, 0.8, 90.0, 0.95, 87), swing_volume_db - 2.0)
+
 	_weapons.connect(&"attack_started", _on_attack_started)
 	_weapons.connect(&"attack_hit", _on_attack_hit)
 	_weapons.connect(&"shield_charge_started", _on_shield_charge_started)
@@ -73,6 +85,7 @@ func _ready() -> void:
 	_weapons.connect(&"shield_charge_impact", _on_shield_charge_impact)
 	_weapons.connect(&"shield_charge_blocked", _on_shield_charge_impact)
 	_weapons.connect(&"empowered_attack_started", _on_empowered_attack_started)
+	_weapons.connect(&"crossbow_dry_fired", play_sound.bind(&"dry_crossbow", 1.0))
 
 
 ## Plays one of the sounds by name (see _ready), with an optional extra pitch factor.

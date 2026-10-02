@@ -22,6 +22,8 @@ extends Node3D
 ## carries them in front of the shield, and crushes them if it then runs into a wall.
 
 signal weapon_changed(weapon_id: StringName)
+## The loadout (weapon_order) was set by set_loadout().
+signal loadout_changed(weapon_ids: Array[StringName])
 signal attack_started(weapon_id: StringName)
 signal attack_hit(weapon_id: StringName, hit_info: Dictionary)
 signal attack_finished(weapon_id: StringName)
@@ -36,6 +38,12 @@ signal shield_charge_blocked
 signal shield_charge_stunned(enemy: Node3D)
 ## An S-rank empowered move began: the sword's wave, the halberd's long dash or the crushing charge.
 signal empowered_attack_started(weapon_id: StringName)
+## The crossbow fired, spending the combo meter at this rank (0 D … 4 S); explosive at S.
+signal crossbow_fired(rank: int, is_explosive: bool)
+## The crossbow was triggered with an empty combo meter and didn't fire.
+signal crossbow_dry_fired
+## An explosive bolt blew up.
+signal crossbow_explosion(center: Vector3, radius: float, hit_count: int)
 ## The charge slammed into a wall or a heavy enemy and knocked the player back.
 signal shield_charge_impact
 
@@ -46,6 +54,8 @@ const WEAPON_NONE: StringName = &"none"
 const WEAPON_BROADSWORD: StringName = &"broadsword"
 const WEAPON_HALBERD: StringName = &"halberd"
 const WEAPON_SHIELD: StringName = &"shield"
+## Ranged weapon that spends the combo meter (see the Crossbow exports).
+const WEAPON_CROSSBOW: StringName = &"crossbow"
 
 const METHOD_SET_HOLSTERED: StringName = &"set_holstered"
 const METHOD_ON_MELEE_HIT: StringName = &"on_melee_hit"
@@ -71,6 +81,7 @@ const METHOD_START_SHIELD_CARRY: StringName = &"start_shield_carry"
 const METHOD_END_SHIELD_CARRY: StringName = &"end_shield_carry"
 const METHOD_ON_SHIELD_CRUSH: StringName = &"on_shield_crush"
 const SwordWave = preload("res://Scripts/Weapons/sword_wave.gd")
+const CrossbowBolt = preload("res://Scripts/Weapons/crossbow_bolt.gd")
 ## The weapon selector (weapon_wheel.gd) joins this group; attacks wait while it is open.
 const GROUP_WEAPON_WHEEL: StringName = &"weapon_wheel"
 
@@ -79,6 +90,7 @@ const GROUP_WEAPON_WHEEL: StringName = &"weapon_wheel"
 @export var broadsword_path: NodePath = NodePath("Broadsword")
 @export var halberd_path: NodePath = NodePath("Halberd")
 @export var shield_path: NodePath = NodePath("Shield")
+@export var crossbow_path: NodePath = NodePath("Crossbow")
 ## Ranged weapon that is put away while a melee weapon is out.
 @export var pistol_path: NodePath = NodePath("../Pistol")
 
@@ -101,6 +113,8 @@ const GROUP_WEAPON_WHEEL: StringName = &"weapon_wheel"
 @export var halberd_attack: MeleeAttackData
 ## Short bash with a very small hit area.
 @export var shield_attack: MeleeAttackData
+## Crossbow shot. Only its timing, poses, camera kick and loudness are used; the bolt does the hitting.
+@export var crossbow_attack: MeleeAttackData
 ## A click this many seconds before the weapon is ready still attacks as soon as it can.
 @export var attack_input_buffer: float = 0.15
 ## Physics layers attacks can hit. Matches the player's movement collision layer.
@@ -209,6 +223,30 @@ const GROUP_WEAPON_WHEEL: StringName = &"weapon_wheel"
 ## Glow pulses per second.
 @export var empowered_glow_pulse_speed: float = 3.0
 
+@export_group("Crossbow")
+## The crossbow only fires with something on the combo meter. Each shot spends all of it, and the
+## bolt's damage depends on the rank it was fired at: D, C, B, A, S.
+@export var crossbow_rank_damage: Array[float] = [2.0, 3.0, 5.0, 8.0, 12.0]
+## Bolt speed (m/s) and push on what it hits.
+@export var crossbow_bolt_speed: float = 80.0
+@export var crossbow_bolt_impulse: float = 12.0
+## Freeze on an enemy hit by a bolt (the crossbow itself doesn't freeze).
+@export var crossbow_hit_stop_time: float = 0.08
+## Screen shake on a bolt hit at rank D, and how much more per rank above it.
+@export_range(0.0, 1.0) var crossbow_hit_screen_shake: float = 0.2
+@export_range(0.0, 1.0) var crossbow_hit_screen_shake_per_rank: float = 0.08
+## At S rank (empowered_rank) the bolt explodes where it lands: radius (m), damage at the centre,
+## share of it at the edge, and the shove on props.
+@export var crossbow_explosion_radius: float = 6.0
+@export var crossbow_explosion_damage: float = 10.0
+@export_range(0.0, 1.0) var crossbow_explosion_edge_damage_ratio: float = 0.4
+@export var crossbow_explosion_impulse: float = 30.0
+## Screen shake and loudness of the explosion.
+@export_range(0.0, 1.0) var crossbow_explosion_screen_shake: float = 0.8
+@export var crossbow_explosion_loudness: float = 60.0
+## Seconds between dry-fire clicks when the meter is empty.
+@export var crossbow_dry_fire_cooldown: float = 0.3
+
 @export_group("Visuals")
 ## Keeps the viewmodels from casting odd shadows onto the world.
 @export var cast_shadows: bool = false
@@ -251,6 +289,8 @@ var _charge_blocker: Node3D
 var _pending_impact_heading: Vector3 = Vector3.ZERO
 var _pending_impact_timer: float = 0.0
 var _attack_empowered: bool = false
+var _crossbow_rank: int = -1
+var _dry_fire_timer: float = 0.0
 var _charge_empowered: bool = false
 var _empowered_dash_timer: float = 0.0
 var _dash_passed_enemies: Array[Node3D] = []
@@ -268,23 +308,23 @@ func _ready() -> void:
 	_register_weapon(WEAPON_BROADSWORD, broadsword_path, broadsword_attack)
 	_register_weapon(WEAPON_HALBERD, halberd_path, halberd_attack)
 	_register_weapon(WEAPON_SHIELD, shield_path, shield_attack)
+	_register_weapon(WEAPON_CROSSBOW, crossbow_path, crossbow_attack)
 	if not cast_shadows:
 		_disable_shadows(self)
 	equip(starting_weapon)
 
 
 func _physics_process(delta: float) -> void:
-	if InputManager.is_weapon_sword_just_pressed():
-		equip(WEAPON_BROADSWORD)
-	elif InputManager.is_weapon_halberd_just_pressed():
-		equip(WEAPON_HALBERD)
-	elif InputManager.is_weapon_shield_just_pressed():
-		equip(WEAPON_SHIELD)
+	# Number keys pick a loadout slot: 1 = first weapon in weapon_order, 2 = second, … up to 9.
+	var slot: int = InputManager.get_weapon_slot_just_pressed()
+	if slot >= 0:
+		equip_slot(slot)
 	var cycle: int = InputManager.consume_weapon_cycle()
 	if cycle != 0:
 		cycle_weapon(cycle)
 
 	_update_recover_timers(delta)
+	_dry_fire_timer = maxf(_dry_fire_timer - delta, 0.0)
 	_update_pending_impact(delta)
 	_update_attack_input(delta)
 	_update_attack(delta)
@@ -386,6 +426,9 @@ func get_carried_enemy_count() -> int:
 func equip(weapon_id: StringName) -> bool:
 	if weapon_id == _equipped_weapon or not _weapons.has(weapon_id):
 		return false
+	# Only weapons in the loadout can be taken out.
+	if not weapon_order.is_empty() and not weapon_order.has(weapon_id):
+		return false
 
 	_cancel_attack()
 	_shield_press_pending = false
@@ -404,6 +447,38 @@ func equip(weapon_id: StringName) -> bool:
 	return true
 
 
+## Equips the weapon in loadout slot index (0-based) of weapon_order. False if the slot is empty.
+func equip_slot(index: int) -> bool:
+	if index < 0 or index >= weapon_order.size():
+		return false
+	return equip(weapon_order[index])
+
+
+## Every weapon this node has, in registration order (broadsword, halberd, shield), whether or not
+## it is in the loadout. The loadout screen offers these.
+func get_all_weapons() -> Array[StringName]:
+	var all: Array[StringName] = []
+	for weapon_id in _weapons.keys():
+		all.append(weapon_id)
+	return all
+
+
+## Sets the loadout: the weapons the player can use, in slot order (keys 1, 2, 3, cycling and the
+## selector wheel follow it). The first one is taken out right away if the weapon in hand isn't in
+## the new loadout. Unknown ids are ignored; an empty list is refused.
+func set_loadout(weapon_ids: Array[StringName]) -> void:
+	var loadout: Array[StringName] = []
+	for weapon_id in weapon_ids:
+		if _weapons.has(weapon_id) and not loadout.has(weapon_id):
+			loadout.append(weapon_id)
+	if loadout.is_empty():
+		return
+	weapon_order = loadout
+	if not weapon_order.has(_equipped_weapon):
+		equip(weapon_order[0])
+	loadout_changed.emit(weapon_order)
+
+
 ## Equips the weapon steps places after the current one in weapon_order (negative goes back),
 ## wrapping around. Q and mouse wheel up step +1, mouse wheel down steps -1.
 func cycle_weapon(steps: int) -> bool:
@@ -418,6 +493,14 @@ func cycle_weapon(steps: int) -> bool:
 
 ## Starts the equipped weapon's attack. Returns true if an attack started.
 func attack() -> bool:
+	# The crossbow needs something on the combo meter. Checked before the reload, so clicking an
+	# empty crossbow always gives the dry-fire feedback.
+	if _equipped_weapon == WEAPON_CROSSBOW and ComboMeter.get_rank() < 0 and not _is_equipping:
+		_attack_buffer_timer = 0.0
+		if _dry_fire_timer <= 0.0:
+			_dry_fire_timer = maxf(crossbow_dry_fire_cooldown, 0.0)
+			crossbow_dry_fired.emit()
+		return false
 	if not can_attack():
 		return false
 
@@ -435,6 +518,9 @@ func attack() -> bool:
 	_attack_next_ray_angle = attack_data.get_half_arc_degrees()
 	# The shield's bash is never empowered; only its charge is.
 	_attack_empowered = is_empowered() and _equipped_weapon != WEAPON_SHIELD
+	if _equipped_weapon == WEAPON_CROSSBOW:
+		# The whole meter goes into this shot; the rank it was at sets the damage.
+		_crossbow_rank = ComboMeter.spend_all()
 	_register_weapon_use(_equipped_weapon)
 	# Busy for the whole attack. Switching away doesn't skip it; only another weapon's attack clears it.
 	_recover_timers[_equipped_weapon] = attack_data.get_duration()
@@ -840,7 +926,9 @@ func _update_attack(delta: float) -> void:
 	# The tick that passes strike_end still checks once, so a fast strike can't skip its last hits.
 	if _attack_strike_started and not _attack_strike_finished:
 		var strike_progress: float = attack_data.get_strike_progress(progress)
-		_update_attack_hits(attack_data, strike_progress)
+		# The crossbow's bolt does its own hitting.
+		if _equipped_weapon != WEAPON_CROSSBOW:
+			_update_attack_hits(attack_data, strike_progress)
 		if strike_progress >= 1.0:
 			_attack_strike_finished = true
 
@@ -860,6 +948,10 @@ func _start_strike(attack_data: MeleeAttackData) -> void:
 		empowered_attack_started.emit(_equipped_weapon)
 		if _equipped_weapon == WEAPON_BROADSWORD:
 			_launch_sword_wave()
+
+	if _equipped_weapon == WEAPON_CROSSBOW:
+		_fire_crossbow_bolt(_crossbow_rank)
+		return
 
 	if attack_data.dash_distance <= 0.0 or player == null or not player.has_method(METHOD_START_DASH):
 		return
@@ -1379,3 +1471,73 @@ func _set_overlay(node: Node, overlay: Material) -> void:
 		geometry.material_overlay = overlay
 	for child in node.get_children():
 		_set_overlay(child, overlay)
+
+
+# --- Crossbow ------------------------------------------------------------------------------------
+
+## Fires a bolt from just right of the camera toward whatever the crosshair is on. Damage by rank;
+## explosive at empowered_rank (S).
+func _fire_crossbow_bolt(rank: int) -> void:
+	if _camera == null or player == null or rank < 0:
+		return
+	var camera_transform: Transform3D = _camera.global_transform.orthonormalized()
+	var forward: Vector3 = -camera_transform.basis.z
+	var excluded: Array[RID] = _get_excluded_rids()
+
+	# Aim at the crosshair: find what the centre of the screen points at, then fly there from the bow.
+	var aim_point: Vector3 = camera_transform.origin + forward * 200.0
+	var aim_query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(camera_transform.origin, aim_point, hit_collision_mask, excluded)
+	var aim_hit: Dictionary = get_world_3d().direct_space_state.intersect_ray(aim_query)
+	if not aim_hit.is_empty():
+		aim_point = Vector3(aim_hit.get("position", aim_point))
+	var start: Vector3 = camera_transform.origin + forward * 0.6 + camera_transform.basis.x * 0.12 - camera_transform.basis.y * 0.1
+	if aim_point.distance_to(camera_transform.origin) < 1.5:
+		start = camera_transform.origin
+	var direction: Vector3 = (aim_point - start).normalized()
+
+	var explosive: bool = rank >= empowered_rank
+	var bolt: Node3D = Node3D.new()
+	bolt.set_script(CrossbowBolt)
+	bolt.set(&"speed", crossbow_bolt_speed)
+	bolt.set(&"collision_mask", hit_collision_mask)
+	bolt.set(&"damage", crossbow_rank_damage[clampi(rank, 0, crossbow_rank_damage.size() - 1)] if not crossbow_rank_damage.is_empty() else 1.0)
+	bolt.set(&"physics_impulse", crossbow_bolt_impulse)
+	bolt.set(&"is_explosive", explosive)
+	bolt.set(&"explosion_radius", crossbow_explosion_radius)
+	bolt.set(&"explosion_damage", crossbow_explosion_damage)
+	bolt.set(&"explosion_edge_damage_ratio", crossbow_explosion_edge_damage_ratio)
+	bolt.set(&"explosion_impulse", crossbow_explosion_impulse)
+	var parent: Node = get_tree().current_scene if get_tree().current_scene != null else get_tree().root
+	parent.add_child(bolt)
+	bolt.call(&"launch", start, direction, self, excluded)
+	crossbow_fired.emit(rank, explosive)
+
+
+## Called by a bolt for what it hits (directly or with its explosion).
+func on_crossbow_bolt_hit(target: Node3D, hit_info: Dictionary, impulse: float) -> void:
+	if target == null or not is_instance_valid(target):
+		return
+	hit_info["weapon"] = WEAPON_CROSSBOW
+	hit_info["attacker"] = player
+	if target.has_method(METHOD_ON_MELEE_HIT):
+		target.call(METHOD_ON_MELEE_HIT, hit_info)
+		if target.has_method(METHOD_APPLY_HIT_STOP):
+			target.call(METHOD_APPLY_HIT_STOP, maxf(crossbow_hit_stop_time, 0.0))
+		if _camera != null and _camera.has_method(METHOD_ADD_SCREEN_SHAKE):
+			var rank: int = maxi(_crossbow_rank, 0)
+			_camera.call(METHOD_ADD_SCREEN_SHAKE, crossbow_hit_screen_shake + crossbow_hit_screen_shake_per_rank * float(rank))
+	var rigid_body: RigidBody3D = target as RigidBody3D
+	if rigid_body != null and impulse > 0.0:
+		rigid_body.sleeping = false
+		rigid_body.apply_central_impulse(Vector3(hit_info.get("direction", Vector3.ZERO)) * impulse)
+	if crossbow_attack != null:
+		LoudnessManger.register_sound(crossbow_attack.hit_loudness)
+	attack_hit.emit(WEAPON_CROSSBOW, hit_info)
+
+
+## Called by an explosive bolt when it blows up.
+func on_crossbow_bolt_explosion(center: Vector3, radius: float, hit_count: int) -> void:
+	if _camera != null and _camera.has_method(METHOD_ADD_SCREEN_SHAKE):
+		_camera.call(METHOD_ADD_SCREEN_SHAKE, crossbow_explosion_screen_shake)
+	LoudnessManger.register_sound(crossbow_explosion_loudness)
+	crossbow_explosion.emit(center, radius, hit_count)

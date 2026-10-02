@@ -14,6 +14,7 @@
 [ext_resource type="Script" path="res://Scripts/UI/weapon_wheel.gd" id="13_wheel"]
 [ext_resource type="Script" path="res://Scripts/UI/threat_indicators.gd" id="14_threats"]
 [ext_resource type="Script" path="res://Scripts/UI/end_screen.gd" id="15_death"]
+[ext_resource type="Script" path="res://Scripts/UI/loadout_screen.gd" id="16_loadout"]
 [ext_resource type="Script" path="res://Scripts/UI/block_sound.gd" id="11_block_sound"]
 
 [node name="UI" type="CanvasLayer" unique_id=642302505]
@@ -244,3 +245,13 @@ overlay_desaturate = 0.45
 overlay_tint_strength = 0.5
 overlay_darken = 0.1
 overlay_vignette_darken = 0.4
+
+[node name="LoadoutScreen" type="Control" parent="HudRoot"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("16_loadout")

@@ -40,6 +40,7 @@ const GROUP_PLAYER_MELEE: StringName = &"player_melee"
 	&"broadsword": "BROADSWORD",
 	&"halberd": "HALBERD",
 	&"shield": "SHIELD",
+	&"crossbow": "CROSSBOW",
 }
 ## Seconds (real time) the ring takes to fade in or out.
 @export var fade_time: float = 0.08

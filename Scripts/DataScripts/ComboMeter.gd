@@ -47,6 +47,9 @@ const RANK_LETTERS: Array[String] = ["D", "C", "B", "A", "S"]
 ## Same-weapon hits only add points up to this (just below rank C), so one weapon tops out at D.
 @export var same_weapon_cap: float = 99.0
 
+## Hits from these weapons never score (the crossbow spends the meter; its hits shouldn't refill it).
+@export var unscored_weapons: Array[StringName] = [&"crossbow"]
+
 @export_group("Shield Charge")
 ## Points for each enemy crushed against a wall.
 @export var crush_points_per_enemy: float = 60.0
@@ -136,6 +139,14 @@ func add_points(amount: float) -> void:
 	_set_points(_points + amount)
 
 
+## Empties the meter at once (the crossbow's shot) and returns the rank it was at (-1 if empty).
+func spend_all() -> int:
+	var spent_rank: int = _rank
+	_drain_timer = 0.0
+	_set_points(0.0)
+	return spent_rank
+
+
 func reset() -> void:
 	_drain_timer = 0.0
 	_carried_count = 0
@@ -173,9 +184,9 @@ func _begin_attack(weapon_id: StringName) -> void:
 	_last_weapon = weapon_id
 
 
-func _on_attack_hit(_weapon_id: StringName, hit_info: Dictionary) -> void:
+func _on_attack_hit(weapon_id: StringName, hit_info: Dictionary) -> void:
 	# Shield-charge knock-aways score through crush / stun instead.
-	if _is_player_charging():
+	if _is_player_charging() or unscored_weapons.has(weapon_id):
 		return
 	var target: Node = hit_info.get("collider") as Node
 	if target == null or not target.is_in_group(GROUP_ENEMIES):
