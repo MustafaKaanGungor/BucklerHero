@@ -10,16 +10,15 @@ const ACTION_CROUCH: StringName = &"move_crouch"
 const ACTION_SHOOT: StringName = &"shoot"
 const ACTION_RELOAD: StringName = &"reload"
 const ACTION_ATTACK: StringName = &"attack"
-const ACTION_WEAPON_SWORD: StringName = &"weapon_sword"
-const ACTION_WEAPON_HALBERD: StringName = &"weapon_halberd"
-const ACTION_WEAPON_SHIELD: StringName = &"weapon_shield"
+## Right mouse: throw the shield.
+const ACTION_THROW_SHIELD: StringName = &"throw_shield"
 ## Q or mouse wheel up.
 const ACTION_WEAPON_NEXT: StringName = &"weapon_next"
 ## Mouse wheel down.
 const ACTION_WEAPON_PREVIOUS: StringName = &"weapon_previous"
-## Number keys 1-9 pick loadout slots 1-9. The first three keep their old names.
+## Number keys 1-9 pick loadout slots 1-9.
 const WEAPON_SLOT_ACTIONS: Array[StringName] = [
-	&"weapon_sword", &"weapon_halberd", &"weapon_shield",
+	&"weapon_slot_1", &"weapon_slot_2", &"weapon_slot_3",
 	&"weapon_slot_4", &"weapon_slot_5", &"weapon_slot_6",
 	&"weapon_slot_7", &"weapon_slot_8", &"weapon_slot_9",
 ]
@@ -111,6 +110,10 @@ func is_attack_pressed() -> bool:
 	return Input.is_action_pressed(ACTION_ATTACK)
 
 
+func is_throw_shield_just_pressed() -> bool:
+	return Input.is_action_just_pressed(ACTION_THROW_SHIELD)
+
+
 func _input(event: InputEvent) -> void:
 	if event.is_echo():
 		return
@@ -142,18 +145,6 @@ func is_cheat_s_rank_just_pressed() -> bool:
 
 func is_weapon_wheel_pressed() -> bool:
 	return Input.is_action_pressed(ACTION_WEAPON_WHEEL)
-
-
-func is_weapon_sword_just_pressed() -> bool:
-	return Input.is_action_just_pressed(ACTION_WEAPON_SWORD)
-
-
-func is_weapon_halberd_just_pressed() -> bool:
-	return Input.is_action_just_pressed(ACTION_WEAPON_HALBERD)
-
-
-func is_weapon_shield_just_pressed() -> bool:
-	return Input.is_action_just_pressed(ACTION_WEAPON_SHIELD)
 
 
 func is_jump_pressed() -> bool:

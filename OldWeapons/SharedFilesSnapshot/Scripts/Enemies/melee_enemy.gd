@@ -253,6 +253,13 @@ func is_staggered() -> bool:
 	return _state == State.STAGGER and not _is_dead
 
 
+## The hook yanked this enemy: it is pulled in and stays staggered for hit_info["stagger_time"].
+func on_hook_pull(hit_info: Dictionary) -> void:
+	super.on_hook_pull(hit_info)
+	if not _is_dead and not _is_carried:
+		_start_stagger(float(hit_info.get("stagger_time", 0.6)))
+
+
 func on_shield_charge_impact(hit_info: Dictionary) -> void:
 	super.on_shield_charge_impact(hit_info)
 	if not _is_dead and not _is_carried:

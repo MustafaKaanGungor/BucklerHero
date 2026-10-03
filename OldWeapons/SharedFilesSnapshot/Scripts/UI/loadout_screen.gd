@@ -27,15 +27,28 @@ const SoundSynth = preload("res://Scripts/Audio/sound_synth.gd")
 @export_group("Weapons")
 ## Shown name, role and description per weapon id. Weapons missing here use their id.
 @export var weapon_info: Dictionary = {
+	&"broadsword": ["BROADSWORD", "Crowd cutter", "Wide right-to-left sweep, 3.3 m reach.\nHits everyone in the arc, freezing on each.\nS rank: every swing throws a slash wave."],
+	&"halberd": ["HALBERD", "Long reach, lunge", "Long thrust with a forward lunge.\n2 damage, pierces a line of enemies.\nS rank: a 10 m lunge through them, double damage."],
 	&"shield": ["SHIELD", "Defence, crowd control", "Blocks hits from the front while held.\nClick: bash. Hold: charge, carry and crush enemies.\nS rank: the charge crushes everything it touches."],
+	&"crossbow": ["CROSSBOW", "Combo spender", "Needs combo to fire; each shot spends all of it.\nDamage by rank: D 2, C 3, B 5, A 8, S 12.\nAt S the bolt explodes: 6 m blast."],
+	&"war_hammer": ["WAR HAMMER", "Heavy breaker", "Hold only: charge while walking, release to slam.\nShockwave launches enemies; full charge staggers brutes.\nIn the air: plunge slam. S rank: a quake line rolls ahead."],
+	&"sickle_dagger": ["SICKLE & DAGGER", "Fast duelist", "Quick alternating cuts, low damage.\nTriple damage on staggered enemies.\nS rank: hold to throw daggers like a machine gun."],
+	&"morningstar": ["MORNINGSTAR", "Crowd scatterer", "Wide flail swing with huge knockback.\nScatters groups and throws enemies around.\nS rank: thrown enemies hurt whoever they crash into."],
+	&"war_axe": ["WAR AXE", "Cleaver", "Heavy diagonal cleave.\nDoes more damage the more hurt an enemy is.\nS rank: more damage, every axe kill heals 10."],
+	&"hatchet": ["HATCHET", "Heavy throw", "Thrown in an arc for high damage.\nWalk over it to pick it up again.\nS rank: homes in on the enemy you aim at."],
+	&"returning_hatchet": ["RETURNING HATCHET", "Throw and recall", "Thrown in an arc, lower damage.\nA kill brings it back; else pick it up.\nS rank: homes in on your target."],
+	&"hook": ["HOOK", "Mobility, control", "Click: yank an enemy to you (heavies pull you in).\nHold: grapple. Zip to walls and ledges,\nhold jump to swing, let go to keep your speed."],
+	&"talons": ["TALONS", "Parkour predator", "Fast rakes, every third hit a heavy rend.\nLonger wall runs, faster climbs, grab any wall.\nHold: pounce. S rank: pounces chain 3 times."],
 }
 
-## A coloured strip at the top of a weapon's card, for weapons that look alike.
-@export var weapon_colors: Dictionary = {}
+## A coloured strip at the top of a weapon's card, for weapons that look alike (the two hatchets).
+@export var weapon_colors: Dictionary = {
+	&"hatchet": Color(0.62, 0.62, 0.66),
+	&"returning_hatchet": Color(0.3, 0.6, 1.0),
+}
 
 @export_group("Look")
-## Card size in pixels. Six fit side by side, so twelve weapons take two rows. (The old weapons'
-## texts are in OldWeapons/SharedFilesSnapshot/Scripts/UI/loadout_screen.gd.)
+## Card size in pixels. Six fit side by side, so twelve weapons take two rows.
 @export var card_size: Vector2 = Vector2(252.0, 262.0)
 @export var accent_color: Color = Color(1.0, 0.6, 0.2)
 @export var card_color: Color = Color(0.08, 0.08, 0.1, 0.92)

@@ -37,7 +37,18 @@ const GROUP_PLAYER_MELEE: StringName = &"player_melee"
 @export var font_size: int = 28
 ## Display names, in the same order as weapon_order.
 @export var weapon_names: Dictionary = {
+	&"broadsword": "BROADSWORD",
+	&"halberd": "HALBERD",
 	&"shield": "SHIELD",
+	&"crossbow": "CROSSBOW",
+	&"war_hammer": "WAR HAMMER",
+	&"sickle_dagger": "SICKLE & DAGGER",
+	&"morningstar": "MORNINGSTAR",
+	&"war_axe": "WAR AXE",
+	&"hatchet": "HATCHET",
+	&"returning_hatchet": "RETURNING HATCHET",
+	&"hook": "HOOK",
+	&"talons": "TALONS",
 }
 ## Seconds (real time) the ring takes to fade in or out.
 @export var fade_time: float = 0.08

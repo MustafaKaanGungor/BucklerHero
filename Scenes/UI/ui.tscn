@@ -5,7 +5,6 @@
 [ext_resource type="PackedScene" uid="uid://sd70jpaogty1" path="res://Scenes/UI/stamina_bar.tscn" id="3_fo61o"]
 [ext_resource type="PackedScene" uid="uid://bij3k3262vypm" path="res://Scenes/UI/total_loudness_bar.tscn" id="4_total_loudness"]
 [ext_resource type="Script" path="res://Scripts/UI/crosshair.gd" id="5_crosshair"]
-[ext_resource type="Script" path="res://Scripts/UI/ammo_counter.gd" id="6_ammo"]
 [ext_resource type="PackedScene" path="res://Scenes/UI/health_bar.tscn" id="7_health"]
 [ext_resource type="Script" path="res://Scripts/UI/section_hud.gd" id="8_section_hud"]
 [ext_resource type="Script" path="res://Scripts/UI/screen_flash.gd" id="9_screen_flash"]
@@ -16,6 +15,7 @@
 [ext_resource type="Script" path="res://Scripts/UI/end_screen.gd" id="15_death"]
 [ext_resource type="Script" path="res://Scripts/UI/loadout_screen.gd" id="16_loadout"]
 [ext_resource type="Script" path="res://Scripts/UI/block_sound.gd" id="11_block_sound"]
+[ext_resource type="Script" path="res://Scripts/UI/action_feed.gd" id="17_action_feed"]
 
 [node name="UI" type="CanvasLayer" unique_id=642302505]
 layer = 120
@@ -164,6 +164,22 @@ grow_vertical = 0
 mouse_filter = 2
 script = ExtResource("12_combo")
 
+[node name="ActionFeed" type="Control" parent="HudRoot"]
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = 110.0
+offset_top = -250.0
+offset_right = 430.0
+offset_bottom = -40.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+script = ExtResource("17_action_feed")
+
 [node name="ThreatIndicators" type="Control" parent="HudRoot"]
 layout_mode = 1
 anchors_preset = 15
@@ -183,28 +199,6 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("13_wheel")
-
-[node name="AmmoCounter" type="Label" parent="HudRoot"]
-layout_mode = 1
-anchors_preset = 3
-anchor_left = 1.0
-anchor_top = 1.0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = -362.0
-offset_top = -110.0
-offset_right = -42.0
-offset_bottom = -46.0
-grow_horizontal = 0
-grow_vertical = 0
-mouse_filter = 2
-theme_override_colors/font_outline_color = Color(0, 0, 0, 0.7)
-theme_override_constants/outline_size = 8
-theme_override_font_sizes/font_size = 40
-text = "12 / ∞"
-horizontal_alignment = 2
-vertical_alignment = 2
-script = ExtResource("6_ammo")
 
 [node name="HitSound" type="AudioStreamPlayer" parent="."]
 script = ExtResource("10_hit_sound")

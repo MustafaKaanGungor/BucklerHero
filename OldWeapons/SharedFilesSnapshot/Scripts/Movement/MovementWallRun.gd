@@ -186,6 +186,12 @@ extends Node
 ## Blend speed used while softly releasing from the wall.
 @export var wall_run_release_blend_lerp_speed: float = 5.6
 
+
+@export_group("Talons")
+## Wall runs last this many times longer while the talons are in hand.
+@export var talon_duration_multiplier: float = 1.5
+
+var _talon_bonus_active: bool = false
 var _active_entry_horizontal_speed: float = 0.0
 var _active_sprint_blend: float = 0.0
 var _active_combo_speed_bonus: float = 0.0
@@ -348,6 +354,11 @@ func get_wall_run_speed_limit() -> float:
 	return base_speed_limit
 
 
+## Talons in hand (pushed by the player every tick): wall runs last talon_duration_multiplier longer.
+func set_talon_bonus(active: bool) -> void:
+	_talon_bonus_active = active
+
+
 func get_wall_run_time_limit() -> float:
 	var entry_ratio: float = _get_entry_speed_ratio()
 	var combo_ratio: float = clampf(_active_combo_speed_bonus / maxf(MovementRun.combo_max_speed_bonus, 0.001), 0.0, 1.0)
@@ -357,7 +368,10 @@ func get_wall_run_time_limit() -> float:
 	bonus_time += combo_ratio * maxf(combo_duration_bonus, 0.0)
 	bonus_time += _get_entry_speed_range_ratio() * maxf(entry_speed_range_duration_bonus, 0.0)
 	bonus_time = minf(bonus_time, maxf(max_bonus_wall_run_time, 0.0))
-	return maxf(max_wall_run_time, 0.0) + bonus_time
+	var limit: float = maxf(max_wall_run_time, 0.0) + bonus_time
+	if _talon_bonus_active:
+		limit *= maxf(talon_duration_multiplier, 0.0)
+	return limit
 
 
 func get_wall_run_horizontal_velocity(

@@ -127,6 +127,21 @@ func drain_shield_charge(delta: float) -> bool:
 	return _drain_stamina(shield_charge_stamina_per_second, delta)
 
 
+## Hook grapple: zipping and swinging drain at MovementGrapple's rates.
+func drain_grapple(delta: float, swinging: bool) -> bool:
+	var rate: float = MovementGrapple.swing_stamina_per_second if swinging else MovementGrapple.zip_stamina_per_second
+	return _drain_stamina(rate, delta)
+
+
+## Hook grapple latch cost (MovementGrapple.latch_stamina_cost).
+func spend_grapple() -> bool:
+	var cost: float = maxf(MovementGrapple.latch_stamina_cost, 0.0)
+	if not _can_use_instant_action(cost):
+		return false
+	_spend_stamina(cost)
+	return true
+
+
 func spend_slide_jump() -> bool:
 	if not can_slide_jump():
 		return false

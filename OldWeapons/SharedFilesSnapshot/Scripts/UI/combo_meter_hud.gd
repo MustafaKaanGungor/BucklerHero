@@ -110,7 +110,7 @@ func _ready() -> void:
 
 	modulate.a = 0.0
 	ComboMeter.rank_changed.connect(_on_rank_changed)
-	# Warnings (show_message) live outside this control, which fades out when empty.
+	# The crossbow's "no combo" warning lives outside this control, which fades out when empty.
 	_message = Label.new()
 	_message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_message.add_theme_font_size_override(&"font_size", 30)
@@ -135,7 +135,7 @@ func _layout() -> void:
 	_bar_back.size = bar_size
 
 
-## Flashes a short warning above the meter (cheat toggles; the old crossbow used it for "NEED COMBO").
+## Flashes a short warning above the meter (the crossbow fired with an empty meter).
 func show_message(text: String) -> void:
 	_message.text = text
 	_message_time = 1.0
@@ -144,6 +144,8 @@ func show_message(text: String) -> void:
 func _process(delta: float) -> void:
 	if _weapons == null or not is_instance_valid(_weapons):
 		_weapons = get_tree().get_first_node_in_group(&"player_melee")
+		if _weapons != null and _weapons.has_signal(&"crossbow_dry_fired"):
+			_weapons.connect(&"crossbow_dry_fired", show_message.bind("NEED COMBO"))
 	if not ComboMeter.cheat_toggled.is_connected(_on_cheat_toggled):
 		ComboMeter.cheat_toggled.connect(_on_cheat_toggled)
 	if _message.is_inside_tree():

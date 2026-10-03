@@ -10,7 +10,8 @@ signal landed(fall_speed: float, impact: float)
 const FEEDBACK_MEMORY_TIME: float = 0.14
 const METHOD_GET_EQUIPPED_WEAPON: StringName = &"get_equipped_weapon"
 const METHOD_GET_MOVE_SPEED_MULTIPLIER: StringName = &"get_move_speed_multiplier"
-const METHOD_IS_SHIELD_IN_HAND: StringName = &"is_shield_in_hand"
+## Must match the talons' weapon id (melee_weapons.gd WEAPON_TALONS).
+const WEAPON_TALONS: StringName = &"talons"
 ## Must match WEAPON_SHIELD in melee_weapons.gd.
 const WEAPON_SHIELD: StringName = &"shield"
 
@@ -131,6 +132,19 @@ var _last_wall_jump_normal: Vector3 = Vector3.ZERO
 var _wall_jump_lockout_timer: float = 0.0
 var _wall_jump_feedback: float = 0.0
 var _is_shield_charging: bool = false
+## Hook grapple (MovementGrapple): pulled toward / swinging under _grapple_anchor.
+var _is_grappling: bool = false
+## Talon pounce: an arc from _pounce_start to _pounce_end over _pounce_duration, peaking _pounce_height up.
+var _is_pouncing: bool = false
+var _pounce_start: Vector3 = Vector3.ZERO
+var _pounce_end: Vector3 = Vector3.ZERO
+var _pounce_height: float = 0.0
+var _pounce_duration: float = 0.0
+var _pounce_timer: float = 0.0
+var _is_grapple_swinging: bool = false
+var _grapple_anchor: Vector3 = Vector3.ZERO
+var _grapple_normal: Vector3 = Vector3.UP
+var _grapple_length: float = 0.0
 var _is_shield_charge_braking: bool = false
 var _shield_charge_heading: Vector3 = Vector3.ZERO
 var _shield_charge_speed: float = 0.0
@@ -172,6 +186,7 @@ func _physics_process(delta: float) -> void:
 	_update_combo_speed(delta)
 	_update_wall_jump_lockout(delta)
 	InputManager.update_movement_state(delta)
+	_sync_talon_bonus()
 	_move_input = _read_move_input()
 	_wish_direction = _get_wish_direction(_move_input)
 	_wants_crouch = InputManager.is_crouch_pressed()
@@ -191,7 +206,7 @@ func _physics_process(delta: float) -> void:
 	_is_forced_crouching = _should_force_crouch()
 	if _is_shield_charging and _is_forced_crouching:
 		_stop_shield_charge()
-	if _is_edge_pulling_over or _is_edge_holding or _is_shield_charging:
+	if _is_edge_pulling_over or _is_edge_holding or _is_shield_charging or _is_grappling or _is_pouncing:
 		_stop_slide()
 	else:
 		_update_slide_state(delta, on_floor)
@@ -202,9 +217,13 @@ func _physics_process(delta: float) -> void:
 	_update_climb_state(on_floor)
 	_update_climb_blend(delta)
 	_update_edge_hold_blend(delta)
+	if _is_grappling and (_is_climbing or _is_edge_pulling_over or _is_edge_holding or _is_shield_charging):
+		_stop_grapple()
+	if _is_pouncing and (_is_climbing or _is_edge_pulling_over or _is_edge_holding or _is_shield_charging):
+		_is_pouncing = false
 	if _is_edge_pulling_over or _is_edge_holding:
 		_stop_wall_run()
-	elif _is_climbing:
+	elif _is_climbing or _is_grappling or _is_pouncing:
 		_stop_wall_run()
 	else:
 		_update_wall_run_state(delta, on_floor)
@@ -225,6 +244,10 @@ func _physics_process(delta: float) -> void:
 		_apply_climb_movement(delta)
 	elif _is_shield_charging:
 		_apply_shield_charge_movement(delta)
+	elif _is_grappling:
+		_apply_grapple_movement(delta)
+	elif _is_pouncing:
+		_apply_pounce_movement(delta)
 	elif on_floor and _is_sliding:
 		_apply_slide_movement(delta)
 	elif _is_wall_running:
@@ -236,7 +259,7 @@ func _physics_process(delta: float) -> void:
 	else:
 		_apply_air_movement(_wish_direction, _target_speed, delta)
 
-	if not _is_climbing and not _is_edge_pulling_over and not _is_edge_holding:
+	if not _is_climbing and not _is_edge_pulling_over and not _is_edge_holding and not _is_grappling and not _is_pouncing:
 		_apply_vertical_motion(delta, on_floor)
 	_spend_active_stamina(delta)
 
@@ -292,9 +315,172 @@ func get_wish_direction() -> Vector3:
 	return _wish_direction
 
 
-## Also true during a shield charge, so camera and hands treat the charge like a sprint.
+## Also true during a shield charge, a grapple zip and a pounce, so camera and hands treat them like a sprint.
 func is_sprinting() -> bool:
-	return _is_sprinting or _is_shield_charging
+	return _is_sprinting or _is_shield_charging or (_is_grappling and not _is_grapple_swinging) or _is_pouncing
+
+
+func is_grappling() -> bool:
+	return _is_grappling
+
+
+func is_grapple_swinging() -> bool:
+	return _is_grappling and _is_grapple_swinging
+
+
+func get_grapple_anchor() -> Vector3:
+	return _grapple_anchor
+
+
+## Latches the hook's grapple to anchor (a point on the level; normal = its surface normal).
+## Returns false if it can't start right now (climbing, on a ledge, charging, no stamina).
+func start_grapple(anchor: Vector3, normal: Vector3) -> bool:
+	if not MovementGrapple.enable_grapple:
+		return false
+	if _is_climbing or _is_edge_pulling_over or _is_edge_holding or _is_shield_charging:
+		return false
+	if not StaminaManager.spend_grapple():
+		return false
+	_stop_slide()
+	_stop_wall_run()
+	_stop_dash()
+	_is_pouncing = false
+	_is_grappling = true
+	_is_grapple_swinging = false
+	_grapple_anchor = anchor
+	_grapple_normal = normal
+	_grapple_length = _get_grapple_point().distance_to(anchor)
+	return true
+
+
+## Talon pounce: leaps along an arc to end_point over duration seconds, peaking arc_height above the
+## straight line. Walls and enemies in the way stop the body as usual. Returns false if it can't start.
+func start_pounce(end_point: Vector3, duration: float, arc_height: float) -> bool:
+	if _is_climbing or _is_edge_pulling_over or _is_edge_holding or _is_shield_charging or _is_grappling:
+		return false
+	_stop_slide()
+	_stop_wall_run()
+	_stop_dash()
+	_is_pouncing = true
+	_pounce_start = global_position
+	_pounce_end = end_point
+	_pounce_height = maxf(arc_height, 0.0)
+	_pounce_duration = maxf(duration, 0.05)
+	_pounce_timer = 0.0
+	return true
+
+
+## Moves the end of a running pounce (the target moved).
+func set_pounce_end(end_point: Vector3) -> void:
+	_pounce_end = end_point
+
+
+func stop_pounce() -> void:
+	if not _is_pouncing:
+		return
+	_is_pouncing = false
+	velocity = Vector3(velocity.x, 0.0, velocity.z) * 0.25
+
+
+func is_pouncing() -> bool:
+	return _is_pouncing
+
+
+func _get_pounce_point(t: float) -> Vector3:
+	var clean_t: float = clampf(t, 0.0, 1.0)
+	return _pounce_start.lerp(_pounce_end, clean_t) + Vector3.UP * (4.0 * _pounce_height * clean_t * (1.0 - clean_t))
+
+
+func _apply_pounce_movement(delta: float) -> void:
+	_pounce_timer += delta
+	var t: float = _pounce_timer / _pounce_duration
+	if t >= 1.0:
+		_is_pouncing = false
+		velocity *= 0.3
+		return
+	velocity = (_get_pounce_point(t) - global_position) / maxf(delta, 0.001)
+
+
+func _sync_talon_bonus() -> void:
+	var melee_weapons: Node = get_node_or_null(melee_weapons_path)
+	var active: bool = melee_weapons != null and melee_weapons.has_method(METHOD_GET_EQUIPPED_WEAPON) and StringName(melee_weapons.call(METHOD_GET_EQUIPPED_WEAPON)) == WEAPON_TALONS
+	MovementWallRun.set_talon_bonus(active)
+	MovementClimb.set_talon_bonus(active)
+
+
+## Lets go of the rope. The velocity is kept as momentum.
+func release_grapple() -> void:
+	_stop_grapple()
+
+
+func _stop_grapple() -> void:
+	_is_grappling = false
+	_is_grapple_swinging = false
+
+
+## The point of the body the rope pulls on (chest height).
+func _get_grapple_point() -> Vector3:
+	return global_position + Vector3.UP * 1.0
+
+
+func _apply_grapple_movement(delta: float) -> void:
+	var from_anchor: Vector3 = _get_grapple_point() - _grapple_anchor
+	var distance: float = from_anchor.length()
+	if distance > MovementGrapple.max_rope_length or not _has_grapple_line_of_sight():
+		_stop_grapple()
+		_apply_air_movement(_wish_direction, _target_speed, delta)
+		return
+
+	var wants_swing: bool = InputManager.is_jump_pressed()
+	if wants_swing and not _is_grapple_swinging:
+		# The rope locks at its length the moment the swing starts.
+		_grapple_length = maxf(distance, 0.5)
+	_is_grapple_swinging = wants_swing
+	if _is_grapple_swinging:
+		velocity = MovementGrapple.get_swing_velocity(velocity, from_anchor, _grapple_length, _wish_direction, WorldBasicRules.get_gravity(), delta)
+		return
+
+	var flat_to_anchor: float = Vector2(from_anchor.x, from_anchor.z).length()
+	var arrived: bool = distance <= MovementGrapple.arrive_distance
+	# A top-surface anchor counts as reached once the player is right under its edge.
+	if MovementGrapple.is_top_surface(_grapple_normal) and flat_to_anchor <= MovementGrapple.top_arrival_flat_distance:
+		arrived = true
+	if arrived:
+		_finish_grapple_zip()
+		return
+	velocity = MovementGrapple.get_zip_velocity(velocity, -from_anchor, delta)
+	_grapple_length = distance
+
+
+## Reached the anchor while zipping. On a top surface the player pops up onto it.
+func _finish_grapple_zip() -> void:
+	var on_top: bool = MovementGrapple.is_top_surface(_grapple_normal)
+	_stop_grapple()
+	if not on_top:
+		return
+	var flat: Vector3 = Vector3(_grapple_anchor.x - global_position.x, 0.0, _grapple_anchor.z - global_position.z)
+	if flat.length_squared() > 0.0001:
+		flat = flat.normalized() * MovementGrapple.top_arrival_forward_speed
+	# Enough upward speed for the feet to clear the anchor height (it sits just above the top).
+	var rise: float = maxf(_grapple_anchor.y - global_position.y + 0.2, 0.0)
+	velocity = flat + Vector3.UP * MovementGrapple.get_top_arrival_pop(rise)
+
+
+func _has_grapple_line_of_sight() -> bool:
+	var from: Vector3 = _get_grapple_point()
+	var to_anchor: Vector3 = _grapple_anchor - from
+	# Up close the rope bends over edges; only longer ropes can be cut.
+	if to_anchor.length() <= MovementGrapple.min_line_of_sight_distance:
+		return true
+	# Stop a little short so the anchor's own surface doesn't count as a blocker.
+	var to: Vector3 = _grapple_anchor - to_anchor.normalized() * 0.4
+	var query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(from, to, collision_mask, [get_rid()])
+	var hit: Dictionary = get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return true
+	var collider: Node = hit.get("collider") as Node
+	# Enemies passing through the rope don't cut it.
+	return collider != null and collider.is_in_group(&"enemies")
 
 
 func get_sprint_ramp_blend() -> float:
@@ -584,8 +770,7 @@ func is_shield_blocking(hit_info: Dictionary = {}) -> bool:
 	return false
 
 
-## Move speed multiplier from the weapon in hand (below 1 slows the player and stops sprinting; used by
-## behaviour weapons, e.g. the old war hammer's charge in OldWeapons/).
+## Move speed multiplier from the weapon in hand (below 1 while the war hammer charges).
 func _get_weapon_speed_multiplier() -> float:
 	var melee_weapons: Node = get_node_or_null(melee_weapons_path)
 	if melee_weapons == null or not melee_weapons.has_method(METHOD_GET_MOVE_SPEED_MULTIPLIER):
@@ -593,14 +778,19 @@ func _get_weapon_speed_multiplier() -> float:
 	return clampf(float(melee_weapons.call(METHOD_GET_MOVE_SPEED_MULTIPLIER)), 0.0, 1.0)
 
 
-## The shield is out and in the hand (a thrown shield doesn't block).
+## Highest point reached since leaving the ground (the current height while on the floor).
+func get_airborne_highest_y() -> float:
+	return maxf(_airborne_highest_y, global_position.y)
+
+
+## Sets the vertical speed directly (war hammer plunge slam).
+func set_vertical_velocity(vertical_speed: float) -> void:
+	velocity.y = vertical_speed
+
+
 func _is_shield_equipped() -> bool:
 	var melee_weapons: Node = get_node_or_null(melee_weapons_path)
-	if melee_weapons == null:
-		return false
-	if melee_weapons.has_method(METHOD_IS_SHIELD_IN_HAND):
-		return bool(melee_weapons.call(METHOD_IS_SHIELD_IN_HAND))
-	if not melee_weapons.has_method(METHOD_GET_EQUIPPED_WEAPON):
+	if melee_weapons == null or not melee_weapons.has_method(METHOD_GET_EQUIPPED_WEAPON):
 		return false
 	return StringName(melee_weapons.call(METHOD_GET_EQUIPPED_WEAPON)) == WEAPON_SHIELD
 
@@ -738,6 +928,11 @@ func _spend_active_stamina(delta: float) -> void:
 	if _is_shield_charging:
 		if not _is_shield_charge_braking and not StaminaManager.drain_shield_charge(delta):
 			release_shield_charge()
+		return
+
+	if _is_grappling:
+		if not StaminaManager.drain_grapple(delta, _is_grapple_swinging):
+			_stop_grapple()
 		return
 
 	if _is_sprinting:

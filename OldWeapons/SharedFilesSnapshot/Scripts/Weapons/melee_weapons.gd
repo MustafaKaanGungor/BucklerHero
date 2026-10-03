@@ -2,12 +2,10 @@ extends Node3D
 
 ## First-person melee weapon holder.
 ## Lives under Head/Camera3D and owns one child node per melee weapon.
-## The game is built around the shield; it is the only weapon in the scene right now. The old
-## weapons (broadsword, halberd, crossbow, pistol, war hammer, sickle and dagger, morningstar, war
-## axe, hatchets, hook, talons) were moved to OldWeapons/ (see OldWeapons.md). The switching,
-## loadout and behaviour-weapon machinery is kept for future weapons.
-## One weapon is in hand at a time: the player starts with starting_weapon,
+## Exactly one weapon is in hand at all times: the player starts with starting_weapon,
 ## and pressing the key of the weapon that is already out does nothing (it is not re-equipped).
+## If a pistol node exists at pistol_path it is holstered while a melee weapon is out;
+## the pistol is currently not part of the player scene.
 ## Each weapon's idle pose is its own transform in the scene, so poses are tuned in the editor.
 ## Equipping plays a short rise from a lowered pose into that idle pose.
 ## Attacking: a click starts the equipped weapon's attack (one MeleeAttackData per weapon).
@@ -17,13 +15,12 @@ extends Node3D
 ## The attack plays windup -> strike -> recover on the viewmodel, and while the strike is active
 ## it hits objects inside its hit area: anything that implements on_melee_hit(hit_info),
 ## plus RigidBody3D objects, which get pushed.
-## Shield: a quick click is the bash, holding attack braces the shield and starts a charge, right
-## click throws it (thrown_shield.gd): it flies straight, ricochets between enemies (more ricochets at
-## higher combo ranks) and comes back to the hand; while it is out the hands are empty.
-## New weapons can be added as child nodes with a script extending
-## Scripts/Weapons/Behaviours/weapon_behaviour.gd. They are registered on their own and get hooks for
-## holds, strikes and hits (see that script). How a press is read (attack on press, click or hold,
-## hold only, hold only at S) is their press mode; the shield uses the same click-or-hold path.
+## Shield only: a quick click is the bash, holding attack braces the shield and starts a charge.
+## Weapons added later (war hammer, sickle and dagger, morningstar, war axe, hatchets, hook, talons)
+## are child nodes with a script extending Scripts/Weapons/Behaviours/weapon_behaviour.gd. They are
+## registered on their own and get hooks for holds, strikes and hits (see that script). How a press
+## is read (attack on press, click or hold, hold only, hold only at S) is their press mode; the shield
+## uses the same click-or-hold path.
 ## The charge movement itself lives in player.gd; this script asks for it, holds the braced pose
 ## and knocks away whatever the shield runs into.
 ## Enemies (anything with start_shield_carry) are not knocked away: the charge picks them up,
@@ -44,26 +41,37 @@ signal shield_carry_crushed(crushed_count: int)
 signal shield_charge_blocked
 ## A shield charge slammed into a heavy enemy and staggered it.
 signal shield_charge_stunned(enemy: Node3D)
-## An S-rank empowered move began (the crushing shield charge).
+## An S-rank empowered move began: the sword's wave, the halberd's long dash or the crushing charge.
 signal empowered_attack_started(weapon_id: StringName)
-## A weapon became usable or unusable (behaviour weapons, see is_available()).
+## The crossbow fired, spending the combo meter at this rank (0 D … 4 S); explosive at S.
+signal crossbow_fired(rank: int, is_explosive: bool)
+## The crossbow was triggered with an empty combo meter and didn't fire.
+signal crossbow_dry_fired
+## A weapon became usable or unusable (a hatchet thrown or picked up).
 signal weapon_availability_changed(weapon_id: StringName, available: bool)
+## An explosive bolt blew up.
+signal crossbow_explosion(center: Vector3, radius: float, hit_count: int)
 ## The charge slammed into a wall or a heavy enemy and knocked the player back.
 signal shield_charge_impact
-## The shield left the hand (right click).
-signal shield_thrown
-## The thrown shield hit an enemy and is heading for another one.
-signal shield_ricocheted(from: Vector3, target: Node3D)
-## The thrown shield hit a wall or a prop and turned back.
-signal shield_throw_bounced
-## The thrown shield is back in the hand.
-signal shield_caught
 
 ## Other systems find the melee holder through this group.
 const GROUP_PLAYER_MELEE: StringName = &"player_melee"
 
 const WEAPON_NONE: StringName = &"none"
+const WEAPON_BROADSWORD: StringName = &"broadsword"
+const WEAPON_HALBERD: StringName = &"halberd"
 const WEAPON_SHIELD: StringName = &"shield"
+## Ranged weapon that spends the combo meter (see the Crossbow exports).
+const WEAPON_CROSSBOW: StringName = &"crossbow"
+## Behaviour weapons (ids come from their nodes; listed here for other scripts to match).
+const WEAPON_WAR_HAMMER: StringName = &"war_hammer"
+const WEAPON_SICKLE_DAGGER: StringName = &"sickle_dagger"
+const WEAPON_MORNINGSTAR: StringName = &"morningstar"
+const WEAPON_WAR_AXE: StringName = &"war_axe"
+const WEAPON_HATCHET: StringName = &"hatchet"
+const WEAPON_RETURNING_HATCHET: StringName = &"returning_hatchet"
+const WEAPON_HOOK: StringName = &"hook"
+const WEAPON_TALONS: StringName = &"talons"
 ## Press modes, matching weapon_behaviour.gd's PressMode.
 const PRESS_ON_PRESS: int = 0
 const PRESS_CLICK_OR_HOLD: int = 1
@@ -72,6 +80,7 @@ const PRESS_HOLD_WHEN_EMPOWERED: int = 3
 const METHOD_GET_PRESS_MODE: StringName = &"get_press_mode"
 const METHOD_IS_DEAD: StringName = &"is_dead"
 
+const METHOD_SET_HOLSTERED: StringName = &"set_holstered"
 const METHOD_ON_MELEE_HIT: StringName = &"on_melee_hit"
 const METHOD_APPLY_HIT_STOP: StringName = &"apply_hit_stop"
 const METHOD_PAUSE_DASH: StringName = &"pause_dash"
@@ -94,19 +103,25 @@ const METHOD_ON_SHIELD_CHARGE_IMPACT: StringName = &"on_shield_charge_impact"
 const METHOD_START_SHIELD_CARRY: StringName = &"start_shield_carry"
 const METHOD_END_SHIELD_CARRY: StringName = &"end_shield_carry"
 const METHOD_ON_SHIELD_CRUSH: StringName = &"on_shield_crush"
-const ThrownShield = preload("res://Scripts/Weapons/thrown_shield.gd")
+const SwordWave = preload("res://Scripts/Weapons/sword_wave.gd")
+const CrossbowBolt = preload("res://Scripts/Weapons/crossbow_bolt.gd")
 ## The weapon selector (weapon_wheel.gd) joins this group; attacks wait while it is open.
 const GROUP_WEAPON_WHEEL: StringName = &"weapon_wheel"
 
 @export_group("Nodes")
 @export var player_path: NodePath = NodePath("../../..")
+@export var broadsword_path: NodePath = NodePath("Broadsword")
+@export var halberd_path: NodePath = NodePath("Halberd")
 @export var shield_path: NodePath = NodePath("Shield")
+@export var crossbow_path: NodePath = NodePath("Crossbow")
+## Ranged weapon that is put away while a melee weapon is out.
+@export var pistol_path: NodePath = NodePath("../Pistol")
 
 @export_group("Equip")
-## Weapon in hand when the player spawns.
-@export var starting_weapon: StringName = WEAPON_SHIELD
+## Weapon in hand when the player spawns: "broadsword", "halberd" or "shield".
+@export var starting_weapon: StringName = WEAPON_BROADSWORD
 ## Order the next / previous weapon keys (Q, mouse wheel) step through. Wraps around.
-@export var weapon_order: Array[StringName] = [WEAPON_SHIELD]
+@export var weapon_order: Array[StringName] = [WEAPON_BROADSWORD, WEAPON_HALBERD, WEAPON_SHIELD]
 ## Seconds the weapon takes to rise into its idle pose.
 @export var equip_time: float = 0.18
 ## Offset from the idle pose where the rise starts. Negative Y is below the screen.
@@ -115,8 +130,14 @@ const GROUP_WEAPON_WHEEL: StringName = &"weapon_wheel"
 @export var equip_start_rotation_degrees: Vector3 = Vector3(-38.0, 0.0, 16.0)
 
 @export_group("Attacks")
+## Wide right-to-left sweep.
+@export var broadsword_attack: MeleeAttackData
+## Long, narrow thrust with a short forward dash.
+@export var halberd_attack: MeleeAttackData
 ## Short bash with a very small hit area.
 @export var shield_attack: MeleeAttackData
+## Crossbow shot. Only its timing, poses, camera kick and loudness are used; the bolt does the hitting.
+@export var crossbow_attack: MeleeAttackData
 ## A click this many seconds before the weapon is ready still attacks as soon as it can.
 @export var attack_input_buffer: float = 0.15
 ## Physics layers attacks can hit. Matches the player's movement collision layer.
@@ -195,51 +216,28 @@ const GROUP_WEAPON_WHEEL: StringName = &"weapon_wheel"
 ## Loudness added to the stealth meter by an impact.
 @export var shield_impact_loudness: float = 30.0
 
-@export_group("Shield Throw")
-## Right click throws the shield.
-@export var enable_shield_throw: bool = true
-## Flight speed out (m/s) and back (m/s). It flies straight, no gravity.
-@export var shield_throw_speed: float = 26.0
-@export var shield_return_speed: float = 32.0
-## A throw that hits nothing comes back after flying this far (m).
-@export var shield_throw_max_distance: float = 30.0
-## Rays are cast this far around the shield's centre, so near misses still hit enemies (m).
-@export var shield_throw_hit_radius: float = 0.3
-## Damage, freeze (s), screen shake and push of each hit. The freeze holds both the enemy and the
-## shield in place before it ricochets on (hit-stop).
-@export var shield_throw_damage: float = 2.0
-@export var shield_throw_hit_stop: float = 0.09
-@export_range(0.0, 1.0) var shield_throw_screen_shake: float = 0.2
-@export var shield_throw_impulse: float = 10.0
-## Knockback on hit enemies (multiplies their own knockback speed).
-@export var shield_throw_knockback_multiplier: float = 1.4
-## Extra enemies the shield bounces on to after its first hit, by combo rank: no combo, then D, C,
-## B, A, S.
-@export var shield_ricochets_by_rank: Array[int] = [0, 1, 2, 3, 4, 6]
-## How far the next ricochet target may be (m). It must be in line of sight.
-@export var shield_ricochet_range: float = 15.0
-## Caught when the returning shield gets this close to the camera (m).
-@export var shield_catch_distance: float = 1.0
-## Spin of the thrown shield (radians per second).
-@export var shield_throw_spin_speed: float = 22.0
-## Glow on the thrown shield (additive overlay and a small light) and the colour of its trail.
-@export var shield_throw_glow_color: Color = Color(0.45, 0.75, 1.0, 0.55)
-@export var shield_throw_trail_color: Color = Color(0.45, 0.75, 1.0, 0.65)
-## Trail width (m) and how long each point of it lasts (s).
-@export var shield_throw_trail_width: float = 0.4
-@export var shield_throw_trail_time: float = 0.25
-## Rotation of the thrown shield's model (degrees) on top of the flat model, if it needs tilting.
-@export var shield_throw_visual_rotation_degrees: Vector3 = Vector3.ZERO
-## Loudness of the throw and of the catch.
-@export var shield_throw_loudness: float = 8.0
-## Camera kick when the shield is caught.
-@export var shield_catch_camera_kick_degrees: Vector3 = Vector3(1.2, 0.0, -0.6)
-
 @export_group("Empowered (S Rank)")
 ## At this combo rank (ComboMeter: 0 D ... 4 S) or above, attacks are empowered. The normal shield
 ## bash is never empowered.
 @export var enable_empowerment: bool = true
 @export var empowered_rank: int = 4
+## Broadsword: each swing also launches a slash wave that flies ahead and cuts through enemies.
+## Damage of each wave hit.
+@export var sword_wave_damage: float = 3.0
+## Wave speed (m/s), range (m) and width (m).
+@export var sword_wave_speed: float = 28.0
+@export var sword_wave_range: float = 22.0
+@export var sword_wave_width: float = 3.2
+## The wave follows the camera's pitch, limited to this range (degrees, negative is down), so it
+## doesn't plough into the floor at your feet.
+@export var sword_wave_pitch_limits: Vector2 = Vector2(-12.0, 30.0)
+## Halberd: the lunge covers this many times its normal distance ...
+@export var halberd_empowered_dash_multiplier: float = 4.0
+## ... over this many times its normal duration ...
+@export var halberd_empowered_dash_duration_multiplier: float = 2.0
+## ... and everything it hits on the way takes this many times the damage. The player passes
+## through the enemies it hits instead of stopping against them.
+@export var halberd_empowered_damage_multiplier: float = 2.0
 ## Shield charge: nothing is picked up; every enemy it touches (heavy ones too) is crushed on the
 ## spot and the charge keeps going. Screen shake per crushed enemy.
 @export_range(0.0, 1.0) var empowered_charge_crush_screen_shake: float = 0.35
@@ -247,6 +245,30 @@ const GROUP_WEAPON_WHEEL: StringName = &"weapon_wheel"
 @export var empowered_glow_color: Color = Color(1.0, 0.35, 0.2, 0.35)
 ## Glow pulses per second.
 @export var empowered_glow_pulse_speed: float = 3.0
+
+@export_group("Crossbow")
+## The crossbow only fires with something on the combo meter. Each shot spends all of it, and the
+## bolt's damage depends on the rank it was fired at: D, C, B, A, S.
+@export var crossbow_rank_damage: Array[float] = [2.0, 3.0, 5.0, 8.0, 12.0]
+## Bolt speed (m/s) and push on what it hits.
+@export var crossbow_bolt_speed: float = 80.0
+@export var crossbow_bolt_impulse: float = 12.0
+## Freeze on an enemy hit by a bolt (the crossbow itself doesn't freeze).
+@export var crossbow_hit_stop_time: float = 0.08
+## Screen shake on a bolt hit at rank D, and how much more per rank above it.
+@export_range(0.0, 1.0) var crossbow_hit_screen_shake: float = 0.2
+@export_range(0.0, 1.0) var crossbow_hit_screen_shake_per_rank: float = 0.08
+## At S rank (empowered_rank) the bolt explodes where it lands: radius (m), damage at the centre,
+## share of it at the edge, and the shove on props.
+@export var crossbow_explosion_radius: float = 6.0
+@export var crossbow_explosion_damage: float = 10.0
+@export_range(0.0, 1.0) var crossbow_explosion_edge_damage_ratio: float = 0.4
+@export var crossbow_explosion_impulse: float = 30.0
+## Screen shake and loudness of the explosion.
+@export_range(0.0, 1.0) var crossbow_explosion_screen_shake: float = 0.8
+@export var crossbow_explosion_loudness: float = 60.0
+## Seconds between dry-fire clicks when the meter is empty.
+@export var crossbow_dry_fire_cooldown: float = 0.3
 
 @export_group("Visuals")
 ## Keeps the viewmodels from casting odd shadows onto the world.
@@ -257,6 +279,7 @@ var _camera: Node3D
 var _weapons: Dictionary = {}
 var _idle_transforms: Dictionary = {}
 var _attacks: Dictionary = {}
+var _pistol: Node
 var _equipped_weapon: StringName = WEAPON_NONE
 var _equip_timer: float = 0.0
 var _is_equipping: bool = false
@@ -295,18 +318,26 @@ var _charge_blocker: Node3D
 var _pending_impact_heading: Vector3 = Vector3.ZERO
 var _pending_impact_timer: float = 0.0
 var _attack_empowered: bool = false
+var _crossbow_rank: int = -1
+var _dry_fire_timer: float = 0.0
 var _charge_empowered: bool = false
+var _empowered_dash_timer: float = 0.0
+var _dash_passed_enemies: Array[Node3D] = []
+var _dash_pass_timer: float = 0.0
 var _glow_material: StandardMaterial3D
 var _glow_time: float = 0.0
 var _is_glowing: bool = false
-var _thrown_shield: Node3D
 
 
 func _ready() -> void:
 	add_to_group(GROUP_PLAYER_MELEE)
 	player = get_node_or_null(player_path) as CharacterBody3D
 	_camera = get_parent() as Node3D
+	_pistol = get_node_or_null(pistol_path)
+	_register_weapon(WEAPON_BROADSWORD, broadsword_path, broadsword_attack)
+	_register_weapon(WEAPON_HALBERD, halberd_path, halberd_attack)
 	_register_weapon(WEAPON_SHIELD, shield_path, shield_attack)
+	_register_weapon(WEAPON_CROSSBOW, crossbow_path, crossbow_attack)
 	_register_behaviour_weapons()
 	if not cast_shadows:
 		_disable_shadows(self)
@@ -323,12 +354,12 @@ func _physics_process(delta: float) -> void:
 		cycle_weapon(cycle)
 
 	_update_recover_timers(delta)
+	_dry_fire_timer = maxf(_dry_fire_timer - delta, 0.0)
 	_update_pending_impact(delta)
-	if InputManager.is_throw_shield_just_pressed():
-		throw_shield()
 	_update_attack_input(delta)
 	_update_attack(delta)
 	_update_shield_charge(delta)
+	_update_dash_pass_through(delta)
 	_update_hold(delta)
 	for behaviour in _behaviours.values():
 		behaviour.call(&"behaviour_physics_process", delta)
@@ -378,8 +409,6 @@ func get_attack_progress() -> float:
 
 func can_attack() -> bool:
 	if _is_attacking or _is_equipping or _is_hold_active:
-		return false
-	if _equipped_weapon == WEAPON_SHIELD and is_shield_thrown():
 		return false
 	var behaviour: Node = _get_behaviour(_equipped_weapon)
 	if behaviour != null and bool(behaviour.call(&"is_busy")):
@@ -445,6 +474,7 @@ func equip(weapon_id: StringName) -> bool:
 	_equipped_weapon = weapon_id
 	_equip_timer = 0.0
 	_is_equipping = true
+	_set_pistol_holstered(true)
 
 	var weapon: Node3D = _weapons[weapon_id] as Node3D
 	_apply_weapon_pose()
@@ -486,8 +516,6 @@ func get_previous_weapon() -> StringName:
 
 ## False while a weapon can't be used, for example a thrown hatchet that hasn't been picked up.
 func is_weapon_available(weapon_id: StringName) -> bool:
-	if weapon_id == WEAPON_SHIELD and is_shield_thrown():
-		return false
 	var behaviour: Node = _get_behaviour(weapon_id)
 	return behaviour == null or bool(behaviour.call(&"is_available"))
 
@@ -522,7 +550,7 @@ func equip_slot(index: int) -> bool:
 	return equip(weapon_order[index])
 
 
-## Every weapon this node has, in registration order (shield first), whether or not
+## Every weapon this node has, in registration order (broadsword, halberd, shield), whether or not
 ## it is in the loadout. The loadout screen offers these.
 func get_all_weapons() -> Array[StringName]:
 	var all: Array[StringName] = []
@@ -569,6 +597,14 @@ func cycle_weapon(steps: int) -> bool:
 
 ## Starts the equipped weapon's attack. Returns true if an attack started.
 func attack() -> bool:
+	# The crossbow needs something on the combo meter. Checked before the reload, so clicking an
+	# empty crossbow always gives the dry-fire feedback.
+	if _equipped_weapon == WEAPON_CROSSBOW and ComboMeter.get_rank() < 0 and not _is_equipping:
+		_attack_buffer_timer = 0.0
+		if _dry_fire_timer <= 0.0:
+			_dry_fire_timer = maxf(crossbow_dry_fire_cooldown, 0.0)
+			crossbow_dry_fired.emit()
+		return false
 	if not can_attack():
 		return false
 
@@ -590,6 +626,9 @@ func attack() -> bool:
 	var behaviour: Node = _get_behaviour(_equipped_weapon)
 	if behaviour != null and not bool(behaviour.call(&"has_empowered_click")):
 		_attack_empowered = false
+	if _equipped_weapon == WEAPON_CROSSBOW:
+		# The whole meter goes into this shot; the rank it was at sets the damage.
+		_crossbow_rank = ComboMeter.spend_all()
 	_register_weapon_use(_equipped_weapon)
 	# Busy for the whole attack. Switching away doesn't skip it; only another weapon's attack clears it.
 	_recover_timers[_equipped_weapon] = attack_data.get_duration()
@@ -1063,10 +1102,15 @@ func _update_attack(delta: float) -> void:
 		_attack_strike_started = true
 		_start_strike(attack_data)
 
+	# The empowered halberd keeps hitting everything in front for as long as its long dash lasts.
+	if _empowered_dash_timer > 0.0:
+		_empowered_dash_timer = maxf(_empowered_dash_timer - delta, 0.0)
+		_update_attack_hits(attack_data, 1.0)
+
 	# The tick that passes strike_end still checks once, so a fast strike can't skip its last hits.
 	if _attack_strike_started and not _attack_strike_finished:
 		var strike_progress: float = attack_data.get_strike_progress(progress)
-		# Thrown or ranged behaviour weapons do their own hitting.
+		# The crossbow's bolt and thrown weapons do their own hitting.
 		if _uses_strike_rays(_equipped_weapon):
 			_update_attack_hits(attack_data, strike_progress)
 		if strike_progress >= 1.0:
@@ -1086,7 +1130,12 @@ func _start_strike(attack_data: MeleeAttackData) -> void:
 
 	if _attack_empowered:
 		empowered_attack_started.emit(_equipped_weapon)
+		if _equipped_weapon == WEAPON_BROADSWORD:
+			_launch_sword_wave()
 
+	if _equipped_weapon == WEAPON_CROSSBOW:
+		_fire_crossbow_bolt(_crossbow_rank)
+		return
 	var behaviour: Node = _get_behaviour(_equipped_weapon)
 	if behaviour != null:
 		behaviour.call(&"on_strike_started", attack_data, _attack_empowered)
@@ -1095,7 +1144,13 @@ func _start_strike(attack_data: MeleeAttackData) -> void:
 		return
 
 	var dash_direction: Vector3 = -Basis(Vector3.UP, player.rotation.y).z
-	player.call(METHOD_START_DASH, dash_direction, attack_data.dash_distance, attack_data.dash_duration)
+	var dash_distance: float = attack_data.dash_distance
+	var dash_duration: float = attack_data.dash_duration
+	if _attack_empowered and _equipped_weapon == WEAPON_HALBERD:
+		dash_distance *= maxf(halberd_empowered_dash_multiplier, 0.0)
+		dash_duration *= maxf(halberd_empowered_dash_duration_multiplier, 0.01)
+		_empowered_dash_timer = dash_duration
+	player.call(METHOD_START_DASH, dash_direction, dash_distance, dash_duration)
 
 
 func _finish_attack() -> void:
@@ -1112,6 +1167,7 @@ func _cancel_attack() -> void:
 	_attack_timer = 0.0
 	_attack_hit_ids.clear()
 	_attack_empowered = false
+	_empowered_dash_timer = 0.0
 	if _weapons.has(_equipped_weapon):
 		var weapon: Node3D = _weapons[_equipped_weapon] as Node3D
 		weapon.transform = _idle_transforms[_equipped_weapon]
@@ -1236,10 +1292,16 @@ func _build_hit_info(
 		"normal": Vector3(ray_hit.get("normal", Vector3.UP)),
 		"direction": push_direction.normalized(),
 		"collider": target,
-		"damage": attack_data.damage,
+		"damage": attack_data.damage * _get_damage_multiplier(attack_data),
 		"weapon": _equipped_weapon,
 		"attacker": player,
 	}
+
+
+func _get_damage_multiplier(attack_data: MeleeAttackData) -> float:
+	if _attack_empowered and not _is_casting_charge_hits and attack_data == halberd_attack:
+		return maxf(halberd_empowered_damage_multiplier, 0.0)
+	return 1.0
 
 
 func _apply_hit(attack_data: MeleeAttackData, target: Node3D, hit_info: Dictionary) -> void:
@@ -1247,6 +1309,8 @@ func _apply_hit(attack_data: MeleeAttackData, target: Node3D, hit_info: Dictiona
 	if target.has_method(METHOD_ON_MELEE_HIT):
 		target.call(METHOD_ON_MELEE_HIT, hit_info)
 		_notify_hit_landed(_equipped_weapon, target, hit_info, was_alive)
+		if _empowered_dash_timer > 0.0 and not _is_casting_charge_hits:
+			_pass_through(target)
 		if not _is_casting_charge_hits:
 			_trigger_hit_stop(attack_data, target)
 			_trigger_hit_shake(attack_data)
@@ -1326,7 +1390,7 @@ func _trigger_hit_stop(attack_data: MeleeAttackData, target: Node3D) -> void:
 	_recover_timers[_equipped_weapon] = get_recover_remaining(_equipped_weapon) + freeze_time
 
 
-## Shakes the screen on the attack's first hit (shield bash), or on every hit
+## Shakes the screen on the attack's first hit (halberd thrust, shield bash), or on every hit
 ## for weapons with hit_stop_every_hit (sword sweep), matching their freezes.
 func _trigger_hit_shake(attack_data: MeleeAttackData) -> void:
 	if attack_data.hit_screen_shake <= 0.0:
@@ -1456,6 +1520,8 @@ func _get_behaviour(weapon_id: StringName) -> Node:
 
 
 func _uses_strike_rays(weapon_id: StringName) -> bool:
+	if weapon_id == WEAPON_CROSSBOW:
+		return false
 	var behaviour: Node = _get_behaviour(weapon_id)
 	return behaviour == null or bool(behaviour.call(&"uses_strike_rays"))
 
@@ -1479,6 +1545,12 @@ func _hide_all_weapons() -> void:
 		var weapon: Node3D = _weapons[weapon_id] as Node3D
 		weapon.visible = false
 		weapon.transform = _idle_transforms[weapon_id]
+
+
+func _set_pistol_holstered(holstered: bool) -> void:
+	if _pistol == null or not _pistol.has_method(METHOD_SET_HOLSTERED):
+		return
+	_pistol.call(METHOD_SET_HOLSTERED, holstered)
 
 
 func _ease_out(value: float) -> float:
@@ -1516,7 +1588,79 @@ func _player_bool(method_name: StringName, fallback: bool) -> bool:
 	return bool(player.call(method_name))
 
 
-# --- Empowered attacks (S rank): the crushing charge and the glow ------------------------------
+# --- Empowered attacks (S rank) -----------------------------------------------------------------
+
+## Launches the slash wave from in front of the camera, along the camera's facing (pitch limited).
+func _launch_sword_wave() -> void:
+	if _camera == null or player == null:
+		return
+	var forward: Vector3 = -_camera.global_transform.basis.z
+	var flat: Vector3 = Vector3(forward.x, 0.0, forward.z)
+	if flat.length_squared() <= 0.0001:
+		flat = -Basis(Vector3.UP, player.rotation.y).z
+	flat = flat.normalized()
+	var pitch: float = clampf(asin(clampf(forward.y, -1.0, 1.0)), deg_to_rad(sword_wave_pitch_limits.x), deg_to_rad(sword_wave_pitch_limits.y))
+	var direction: Vector3 = (flat * cos(pitch) + Vector3.UP * sin(pitch)).normalized()
+
+	var wave: Node3D = Node3D.new()
+	wave.set_script(SwordWave)
+	wave.set(&"speed", sword_wave_speed)
+	wave.set(&"max_distance", sword_wave_range)
+	wave.set(&"width", sword_wave_width)
+	wave.set(&"collision_mask", hit_collision_mask)
+	wave.set(&"damage", sword_wave_damage)
+	var parent: Node = get_tree().current_scene if get_tree().current_scene != null else get_tree().root
+	parent.add_child(wave)
+	var start: Vector3 = _camera.global_position + Vector3.DOWN * 0.45 + flat * 1.2
+	wave.call(&"launch", start, direction, self, _get_excluded_rids())
+
+
+## Called by a sword wave for everything it cuts. Works like a sword hit without the hit-stop (the
+## swing is long over), so sounds and the combo meter count it.
+func on_sword_wave_hit(target: Node3D, hit_info: Dictionary) -> void:
+	if target == null or not is_instance_valid(target):
+		return
+	hit_info["weapon"] = WEAPON_BROADSWORD
+	hit_info["attacker"] = player
+	if target.has_method(METHOD_ON_MELEE_HIT):
+		target.call(METHOD_ON_MELEE_HIT, hit_info)
+	var rigid_body: RigidBody3D = target as RigidBody3D
+	if rigid_body != null and broadsword_attack != null and broadsword_attack.physics_impulse > 0.0:
+		rigid_body.sleeping = false
+		rigid_body.apply_central_impulse(Vector3(hit_info.get("direction", Vector3.ZERO)) * broadsword_attack.physics_impulse)
+	attack_hit.emit(WEAPON_BROADSWORD, hit_info)
+
+
+## The empowered halberd dash goes through the enemies it hits instead of stopping against them.
+func _pass_through(target: Node3D) -> void:
+	var body: PhysicsBody3D = target as PhysicsBody3D
+	if body == null or player == null or _dash_passed_enemies.has(target):
+		return
+	player.add_collision_exception_with(body)
+	body.add_collision_exception_with(player)
+	_dash_passed_enemies.append(target)
+
+
+## Ends the pass-through a moment after the dash, once the player is clear of the enemies.
+func _update_dash_pass_through(delta: float) -> void:
+	if _dash_passed_enemies.is_empty():
+		return
+	if _empowered_dash_timer > 0.0:
+		_dash_pass_timer = 0.3
+		return
+	_dash_pass_timer -= delta
+	if _dash_pass_timer > 0.0:
+		return
+	for enemy in _dash_passed_enemies:
+		# Enemies the lunge killed are already freed; casting a freed object is an error, so check first.
+		if not is_instance_valid(enemy) or player == null:
+			continue
+		var body: PhysicsBody3D = enemy as PhysicsBody3D
+		if body != null:
+			player.remove_collision_exception_with(body)
+			body.remove_collision_exception_with(player)
+	_dash_passed_enemies.clear()
+
 
 ## Empowered charge: the enemy breaks immediately (heavy ones too) and the charge carries on.
 func _crush_on_contact(target: Node3D) -> void:
@@ -1566,7 +1710,77 @@ func _set_overlay(node: Node, overlay: Material) -> void:
 		_set_overlay(child, overlay)
 
 
-# --- Services for behaviour weapons (Scripts/Weapons/Behaviours; examples in OldWeapons/) -------
+# --- Crossbow ------------------------------------------------------------------------------------
+
+## Fires a bolt from just right of the camera toward whatever the crosshair is on. Damage by rank;
+## explosive at empowered_rank (S).
+func _fire_crossbow_bolt(rank: int) -> void:
+	if _camera == null or player == null or rank < 0:
+		return
+	var camera_transform: Transform3D = _camera.global_transform.orthonormalized()
+	var forward: Vector3 = -camera_transform.basis.z
+	var excluded: Array[RID] = _get_excluded_rids()
+
+	# Aim at the crosshair: find what the centre of the screen points at, then fly there from the bow.
+	var aim_point: Vector3 = camera_transform.origin + forward * 200.0
+	var aim_query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(camera_transform.origin, aim_point, hit_collision_mask, excluded)
+	var aim_hit: Dictionary = get_world_3d().direct_space_state.intersect_ray(aim_query)
+	if not aim_hit.is_empty():
+		aim_point = Vector3(aim_hit.get("position", aim_point))
+	var start: Vector3 = camera_transform.origin + forward * 0.6 + camera_transform.basis.x * 0.12 - camera_transform.basis.y * 0.1
+	if aim_point.distance_to(camera_transform.origin) < 1.5:
+		start = camera_transform.origin
+	var direction: Vector3 = (aim_point - start).normalized()
+
+	var explosive: bool = rank >= empowered_rank
+	var bolt: Node3D = Node3D.new()
+	bolt.set_script(CrossbowBolt)
+	bolt.set(&"speed", crossbow_bolt_speed)
+	bolt.set(&"collision_mask", hit_collision_mask)
+	bolt.set(&"damage", crossbow_rank_damage[clampi(rank, 0, crossbow_rank_damage.size() - 1)] if not crossbow_rank_damage.is_empty() else 1.0)
+	bolt.set(&"physics_impulse", crossbow_bolt_impulse)
+	bolt.set(&"is_explosive", explosive)
+	bolt.set(&"explosion_radius", crossbow_explosion_radius)
+	bolt.set(&"explosion_damage", crossbow_explosion_damage)
+	bolt.set(&"explosion_edge_damage_ratio", crossbow_explosion_edge_damage_ratio)
+	bolt.set(&"explosion_impulse", crossbow_explosion_impulse)
+	var parent: Node = get_tree().current_scene if get_tree().current_scene != null else get_tree().root
+	parent.add_child(bolt)
+	bolt.call(&"launch", start, direction, self, excluded)
+	crossbow_fired.emit(rank, explosive)
+
+
+## Called by a bolt for what it hits (directly or with its explosion).
+func on_crossbow_bolt_hit(target: Node3D, hit_info: Dictionary, impulse: float) -> void:
+	if target == null or not is_instance_valid(target):
+		return
+	hit_info["weapon"] = WEAPON_CROSSBOW
+	hit_info["attacker"] = player
+	if target.has_method(METHOD_ON_MELEE_HIT):
+		target.call(METHOD_ON_MELEE_HIT, hit_info)
+		if target.has_method(METHOD_APPLY_HIT_STOP):
+			target.call(METHOD_APPLY_HIT_STOP, maxf(crossbow_hit_stop_time, 0.0))
+		if _camera != null and _camera.has_method(METHOD_ADD_SCREEN_SHAKE):
+			var rank: int = maxi(_crossbow_rank, 0)
+			_camera.call(METHOD_ADD_SCREEN_SHAKE, crossbow_hit_screen_shake + crossbow_hit_screen_shake_per_rank * float(rank))
+	var rigid_body: RigidBody3D = target as RigidBody3D
+	if rigid_body != null and impulse > 0.0:
+		rigid_body.sleeping = false
+		rigid_body.apply_central_impulse(Vector3(hit_info.get("direction", Vector3.ZERO)) * impulse)
+	if crossbow_attack != null:
+		LoudnessManger.register_sound(crossbow_attack.hit_loudness)
+	attack_hit.emit(WEAPON_CROSSBOW, hit_info)
+
+
+## Called by an explosive bolt when it blows up.
+func on_crossbow_bolt_explosion(center: Vector3, radius: float, hit_count: int) -> void:
+	if _camera != null and _camera.has_method(METHOD_ADD_SCREEN_SHAKE):
+		_camera.call(METHOD_ADD_SCREEN_SHAKE, crossbow_explosion_screen_shake)
+	LoudnessManger.register_sound(crossbow_explosion_loudness)
+	crossbow_explosion.emit(center, radius, hit_count)
+
+
+# --- Services for behaviour weapons (Scripts/Weapons/Behaviours) ---------------------------------
 
 func get_player() -> CharacterBody3D:
 	return player
@@ -1640,6 +1854,13 @@ func set_attack_data(weapon_id: StringName, data: MeleeAttackData) -> void:
 		_attacks[weapon_id] = data
 
 
+## Hit callback for projectiles thrown by behaviour weapons (crossbow_bolt.gd with report_method set
+## to this). hit_info["weapon"] says whose it is.
+func on_weapon_projectile_hit(target: Node3D, hit_info: Dictionary, impulse: float) -> void:
+	var weapon_id: StringName = StringName(hit_info.get("weapon", WEAPON_NONE))
+	deliver_hit(weapon_id, target, hit_info, float(hit_info.get("hit_stop", 0.03)), float(hit_info.get("shake", 0.05)), impulse)
+
+
 func add_screen_shake(amount: float) -> void:
 	if amount > 0.0 and _camera != null and _camera.has_method(METHOD_ADD_SCREEN_SHAKE):
 		_camera.call(METHOD_ADD_SCREEN_SHAKE, amount)
@@ -1699,182 +1920,3 @@ func get_move_speed_multiplier() -> float:
 func reset_behaviours() -> void:
 	for behaviour in _behaviours.values():
 		behaviour.call(&"reset_behaviour")
-	# A thrown shield comes straight back.
-	if is_shield_thrown():
-		on_thrown_shield_caught(_thrown_shield)
-
-
-# --- Shield throw (right click) -----------------------------------------------------------------
-
-## True while the shield is out of the hand (flying, ricocheting or coming back).
-func is_shield_thrown() -> bool:
-	return _thrown_shield != null and is_instance_valid(_thrown_shield)
-
-
-## The flying shield (thrown_shield.gd), or null while it is in the hand.
-func get_thrown_shield() -> Node3D:
-	return _thrown_shield if is_shield_thrown() else null
-
-
-## The shield is the weapon out and it is in the hand (blocks, bashes and charges only then).
-func is_shield_in_hand() -> bool:
-	return _equipped_weapon == WEAPON_SHIELD and not is_shield_thrown()
-
-
-## How many enemies a throw at the current combo rank bounces on to after the first.
-func get_shield_ricochet_count() -> int:
-	if shield_ricochets_by_rank.is_empty():
-		return 0
-	var index: int = clampi(ComboMeter.get_rank() + 1, 0, shield_ricochets_by_rank.size() - 1)
-	return maxi(shield_ricochets_by_rank[index], 0)
-
-
-## Throws the shield toward the crosshair. Only with the shield in hand and free: not while equipping,
-## bashing, recovering, charging or climbing, not with the selector open or when dead.
-func throw_shield() -> bool:
-	if not enable_shield_throw or not is_shield_in_hand() or _camera == null:
-		return false
-	if _is_attacking or _is_equipping or _is_hold_active or _is_shield_charge_held:
-		return false
-	if get_recover_remaining(WEAPON_SHIELD) > 0.0:
-		return false
-	if _player_bool(METHOD_IS_SHIELD_CHARGING, false) or _is_weapon_blocked() or _is_weapon_wheel_open() or HealthManager.is_dead():
-		return false
-
-	var camera_transform: Transform3D = _camera.global_transform.orthonormalized()
-	var forward: Vector3 = -camera_transform.basis.z
-	var excluded: Array[RID] = _get_excluded_rids()
-	# Fly from in front of the hand straight at what the crosshair points at.
-	var aim_point: Vector3 = camera_transform.origin + forward * 100.0
-	var aim_query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(camera_transform.origin, aim_point, hit_collision_mask, excluded)
-	var aim_hit: Dictionary = get_world_3d().direct_space_state.intersect_ray(aim_query)
-	if not aim_hit.is_empty():
-		aim_point = Vector3(aim_hit.get("position", aim_point))
-	var start: Vector3 = camera_transform.origin + forward * 0.7 + camera_transform.basis.x * 0.15 - camera_transform.basis.y * 0.1
-	if aim_point.distance_to(camera_transform.origin) < 1.5:
-		start = camera_transform.origin
-	var direction: Vector3 = (aim_point - start).normalized()
-
-	_press_pending = false
-	_attack_buffer_timer = 0.0
-	var projectile: Node3D = Node3D.new()
-	projectile.set_script(ThrownShield)
-	projectile.set(&"speed", shield_throw_speed)
-	projectile.set(&"return_speed", shield_return_speed)
-	projectile.set(&"max_distance", shield_throw_max_distance)
-	projectile.set(&"hit_radius", shield_throw_hit_radius)
-	projectile.set(&"catch_distance", shield_catch_distance)
-	projectile.set(&"spin_speed", shield_throw_spin_speed)
-	projectile.set(&"collision_mask", hit_collision_mask)
-	projectile.set(&"ricochets_left", get_shield_ricochet_count())
-	projectile.set(&"hit_freeze_time", shield_throw_hit_stop)
-	projectile.set(&"glow_color", shield_throw_glow_color)
-	projectile.set(&"trail_color", shield_throw_trail_color)
-	projectile.set(&"trail_width", shield_throw_trail_width)
-	projectile.set(&"trail_time", shield_throw_trail_time)
-	spawn_in_world(projectile)
-	projectile.call(&"launch", self, start, direction, _make_thrown_shield_visual(), excluded)
-	_thrown_shield = projectile
-
-	var shield: Node3D = _weapons.get(WEAPON_SHIELD) as Node3D
-	if shield != null:
-		shield.visible = false
-	# A throw counts as a shield attack for the combo meter and the combo rule.
-	register_custom_attack(WEAPON_SHIELD)
-	LoudnessManger.register_sound(shield_throw_loudness)
-	shield_thrown.emit()
-	return true
-
-
-## Called by the thrown shield for each enemy it hits.
-func on_thrown_shield_hit(target: Node3D, point: Vector3, direction: Vector3) -> void:
-	deliver_hit(WEAPON_SHIELD, target, {
-		"position": point,
-		"direction": (direction + Vector3.UP * 0.2).normalized(),
-		"damage": shield_throw_damage,
-		"knockback_multiplier": shield_throw_knockback_multiplier,
-		# Lets listeners (the action feed) tell throw hits from bashes.
-		"source": &"throw",
-	}, shield_throw_hit_stop, shield_throw_screen_shake, shield_throw_impulse)
-
-
-## Called when the thrown shield heads from one enemy to the next.
-func on_thrown_shield_ricochet(from: Vector3, target: Node3D) -> void:
-	shield_ricocheted.emit(from, target)
-
-
-## Called when the thrown shield hits a wall or a prop and turns back. Props get a push.
-func on_thrown_shield_bounced(collider: Node3D, _point: Vector3, direction: Vector3) -> void:
-	var body: RigidBody3D = collider as RigidBody3D
-	if body != null:
-		body.sleeping = false
-		body.apply_central_impulse(direction * shield_throw_impulse)
-	shield_throw_bounced.emit()
-
-
-## The nearest living enemy within shield_ricochet_range of from, with a clear line, not in exclude.
-func find_shield_ricochet_target(from: Vector3, exclude: Array) -> Node3D:
-	var space: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
-	var best: Node3D = null
-	var best_distance: float = maxf(shield_ricochet_range, 0.0)
-	for node in get_tree().get_nodes_in_group(&"enemies"):
-		var enemy: Node3D = node as Node3D
-		if enemy == null or exclude.has(enemy) or not _is_alive(enemy):
-			continue
-		var chest: Vector3 = enemy.global_position + Vector3.UP * 1.0
-		var distance: float = from.distance_to(chest)
-		if distance > best_distance:
-			continue
-		var query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(from, chest, hit_collision_mask, _get_excluded_rids())
-		var blocker: Dictionary = space.intersect_ray(query)
-		if not blocker.is_empty():
-			var collider: Node = blocker.get("collider") as Node
-			if collider != enemy and not (collider != null and collider.is_in_group(&"enemies")):
-				continue
-		best = enemy
-		best_distance = distance
-	return best
-
-
-## Where the returning shield flies to: just in front of and below the camera.
-func get_shield_catch_point() -> Vector3:
-	if _camera == null:
-		return global_position
-	return _camera.global_position - _camera.global_transform.basis.y * 0.25
-
-
-## The shield is back: it rises into the hand like an equip.
-func on_thrown_shield_caught(projectile: Node3D) -> void:
-	if projectile != null and is_instance_valid(projectile):
-		projectile.queue_free()
-	_thrown_shield = null
-	if _equipped_weapon == WEAPON_SHIELD:
-		var shield: Node3D = _weapons.get(WEAPON_SHIELD) as Node3D
-		if shield != null:
-			_equip_timer = 0.0
-			_is_equipping = true
-			_apply_weapon_pose()
-			shield.reset_physics_interpolation()
-			shield.visible = true
-	add_camera_kick(shield_catch_camera_kick_degrees)
-	LoudnessManger.register_sound(shield_throw_loudness)
-	notify_availability_changed(WEAPON_SHIELD)
-	shield_caught.emit()
-
-
-## A copy of the shield model for the thrown shield, lying flat with its face up so it spins like a disc.
-func _make_thrown_shield_visual() -> Node3D:
-	var holder: Node3D = Node3D.new()
-	var shield: Node3D = _weapons.get(WEAPON_SHIELD) as Node3D
-	if shield == null:
-		return holder
-	for child in shield.get_children():
-		var copy: Node = child.duplicate()
-		var copy_3d: Node3D = copy as Node3D
-		if copy_3d != null:
-			# Keep the model's scale but drop the upright pose it has in hand; the raw model lies flat.
-			var scale_value: Vector3 = (child as Node3D).transform.basis.get_scale()
-			copy_3d.transform = Transform3D(Basis.from_euler(_degrees_to_radians(shield_throw_visual_rotation_degrees)) * Basis.from_scale(scale_value), Vector3.ZERO)
-		holder.add_child(copy)
-	_set_overlay(holder, null)
-	return holder

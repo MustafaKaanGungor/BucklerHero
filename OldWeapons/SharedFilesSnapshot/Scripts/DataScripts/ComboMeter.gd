@@ -46,16 +46,12 @@ const RANK_LETTERS: Array[String] = ["D", "C", "B", "A", "S"]
 @export var extra_hit_points: float = 30.0
 ## Each enemy hit of an attack that repeats the previous attack's weapon.
 @export var same_weapon_hit_points: float = 20.0
-## On: repeating the previous attack's weapon scores only same_weapon_hit_points and only up to
-## same_weapon_cap (one weapon tops out at D), so switching weapons is how the meter climbs.
-## Off (the shield-only game): every attack scores like a switch (switch_hit_points, extra_hit_points).
-@export var enable_same_weapon_cap: bool = false
 ## Same-weapon hits only add points up to this (just below rank C), so one weapon tops out at D.
 @export var same_weapon_cap: float = 99.0
 
-## Hits from these weapons never score and don't hold off the drain (the old crossbow and dagger
-## stream used this, see OldWeapons.md).
-@export var unscored_weapons: Array[StringName] = []
+## Hits from these weapons never score and don't hold off the drain: the crossbow spends the meter,
+## and the S-rank dagger stream shouldn't keep S going on its own.
+@export var unscored_weapons: Array[StringName] = [&"crossbow", &"thrown_dagger"]
 
 @export_group("Shield Charge")
 ## Points for each enemy crushed against a wall.
@@ -83,7 +79,7 @@ var _current_attack_weapon: StringName = &""
 var _current_attack_is_switch: bool = false
 var _current_attack_hits: int = 0
 var _carried_count: int = 0
-## Testing cheat (F1): keeps the meter full at S (refills after spend_all(), ignores
+## Testing cheat (F1): keeps the meter full at S (refills after the crossbow spends it, ignores
 ## drain and damage). Toggled with InputManager.is_cheat_s_rank_just_pressed().
 var _cheat_s_lock: bool = false
 
@@ -160,8 +156,7 @@ func add_points(amount: float) -> void:
 	_set_points(_points + amount)
 
 
-## Empties the meter at once and returns the rank it was at (-1 if empty). The old crossbow spent the
-## meter this way; kept for combo-spending moves.
+## Empties the meter at once (the crossbow's shot) and returns the rank it was at (-1 if empty).
 func spend_all() -> int:
 	var spent_rank: int = _rank
 	_drain_timer = 0.0
@@ -215,7 +210,7 @@ func _on_attack_hit(weapon_id: StringName, hit_info: Dictionary) -> void:
 		return
 
 	_current_attack_hits += 1
-	if _current_attack_is_switch or not enable_same_weapon_cap:
+	if _current_attack_is_switch:
 		add_points(switch_hit_points if _current_attack_hits == 1 else extra_hit_points)
 		return
 	# Repeating a weapon only fills the meter up to the cap.

@@ -217,6 +217,16 @@ extends Node
 @export var climb_enter_blend: float = 0.58
 
 
+
+@export_group("Talons")
+## Upward climb speed multiplier while the talons are in hand.
+@export var talon_climb_speed_multiplier: float = 1.3
+## With the talons in hand any wall in front can be grabbed mid-air, jump held or not.
+@export var talon_grab_any_wall: bool = true
+## ... unless falling faster than this (m/s).
+@export var talon_max_fall_speed: float = 14.0
+
+var _talon_bonus_active: bool = false
 func can_try_climb(
 	on_floor: bool,
 	is_sliding: bool,
@@ -239,6 +249,11 @@ func can_try_climb(
 	var needs_jump: bool = require_jump_pressed
 	if is_wall_running:
 		needs_jump = wall_run_transition_requires_jump
+	# Talons grab any wall mid-air: no jump needed, no timing or falling-speed window.
+	if _talon_bonus_active and talon_grab_any_wall:
+		if is_wall_running and needs_jump and not jump_pressed:
+			return false
+		return cooldown_timer <= 0.0 and wish_direction != Vector3.ZERO and vertical_velocity >= -absf(talon_max_fall_speed)
 	if needs_jump and not jump_pressed:
 		return false
 	if cooldown_timer > 0.0:
@@ -360,7 +375,16 @@ func get_wall_climb_vertical_velocity(
 	var max_up_speed: float = maxf(wall_climb_max_up_speed, 0.001)
 	max_up_speed += entry_range_ratio * maxf(climb_entry_speed_max_up_bonus, 0.0)
 	start_speed = minf(start_speed, max_up_speed)
-	return lerpf(start_speed, wall_climb_end_up_speed, progress)
+	var vertical: float = lerpf(start_speed, wall_climb_end_up_speed, progress)
+	# Talons climb faster (only the upward part is scaled).
+	if _talon_bonus_active and vertical > 0.0:
+		vertical *= maxf(talon_climb_speed_multiplier, 0.0)
+	return vertical
+
+
+## Talons in hand (pushed by the player every tick): faster climbs, and any wall can be grabbed.
+func set_talon_bonus(active: bool) -> void:
+	_talon_bonus_active = active
 
 
 func get_wall_climb_velocity(

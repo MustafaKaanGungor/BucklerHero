@@ -87,6 +87,17 @@ var _base_colors: Array[Color] = []
 var _last_hit_direction: Vector3 = Vector3.ZERO
 var _hit_stop_timer: float = 0.0
 var _is_crush_pending: bool = false
+## Upward speed waiting to be applied once a hit-stop ends (apply_launch).
+var _pending_launch: float = 0.0
+## Thrown into other enemies (morningstar at S rank): damage they take on contact, for how long, and
+## who already got hit.
+var _thrown_damage: float = 0.0
+var _thrown_timer: float = 0.0
+var _thrown_source: Node3D
+var _thrown_hit_ids: Dictionary = {}
+## Hook yank: dragged to _pull_target over the rest of _pull_timer.
+var _pull_target: Vector3 = Vector3.ZERO
+var _pull_timer: float = 0.0
 
 
 func _ready() -> void:
@@ -112,7 +123,11 @@ func _physics_process(delta: float) -> void:
 	if _is_carried:
 		return
 
-	if is_on_floor():
+	if _pending_launch > 0.0:
+		# Launched off the ground: skip the floor clamp this tick so the jump isn't cancelled.
+		velocity.y = _pending_launch
+		_pending_launch = 0.0
+	elif is_on_floor():
 		velocity.y = minf(velocity.y, 0.0)
 	else:
 		velocity.y = maxf(
@@ -120,8 +135,21 @@ func _physics_process(delta: float) -> void:
 			-WorldBasicRules.get_terminal_fall_speed()
 		)
 
-	_update_horizontal_velocity(delta)
+	if _pull_timer > 0.0:
+		# Being yanked by the hook: head straight for the spot in front of the player.
+		var to_target: Vector3 = _pull_target - global_position
+		to_target.y = 0.0
+		var speed_scale: float = 1.0 / maxf(_pull_timer, delta)
+		velocity.x = to_target.x * speed_scale
+		velocity.z = to_target.z * speed_scale
+		_pull_timer = maxf(_pull_timer - delta, 0.0)
+		if _pull_timer <= 0.0:
+			velocity.x *= 0.15
+			velocity.z *= 0.15
+	else:
+		_update_horizontal_velocity(delta)
 	move_and_slide()
+	_update_thrown_damage(delta)
 
 
 ## The dummy only slides to a stop. Enemies that move on their own override this.
@@ -168,10 +196,72 @@ func on_melee_hit(hit_info: Dictionary) -> void:
 	var direction: Vector3 = Vector3(hit_info.get("direction", Vector3.ZERO))
 	_last_hit_direction = direction
 	if not _is_carried:
-		# Weapons can knock harder (or not at all) through knockback_multiplier.
+		# Heavy weapons (morningstar) knock harder through knockback_multiplier.
 		var knockback: float = maxf(hit_knockback_speed, 0.0) * maxf(float(hit_info.get("knockback_multiplier", 1.0)), 0.0)
 		velocity += direction * knockback
 	_take_damage(float(hit_info.get("damage", 1.0)))
+
+
+## Throws the enemy upward (hammer slams). Applied after any hit-stop, even from standing on the floor.
+func apply_launch(up_speed: float) -> void:
+	if _is_dead or _is_carried or up_speed <= 0.0:
+		return
+	_pending_launch = maxf(_pending_launch, up_speed)
+
+
+## The hook yanks the enemy: with hit_info["pull_to"] it is dragged to that spot over
+## hit_info["pull_time"] seconds (lifted by hit_info["lift"]); otherwise hit_info["pull_velocity"]
+## replaces its velocity.
+func on_hook_pull(hit_info: Dictionary) -> void:
+	if _is_dead or _is_carried:
+		return
+	if hit_info.has("pull_to"):
+		_pull_target = Vector3(hit_info["pull_to"])
+		_pull_timer = maxf(float(hit_info.get("pull_time", 0.25)), 0.02)
+		velocity = Vector3.ZERO
+		var lift: float = float(hit_info.get("lift", 0.0))
+		if lift > 0.0:
+			_pending_launch = lift
+	else:
+		var pull: Vector3 = Vector3(hit_info.get("pull_velocity", Vector3.ZERO))
+		velocity = pull
+		if pull.y > 0.0:
+			_pending_launch = pull.y
+	_flash_amount = 1.0
+	_apply_flash()
+
+
+## For duration seconds, other enemies this one crashes into take damage (once each), reported
+## through source.deliver_hit as a morningstar hit. Used by the morningstar at S rank.
+func set_thrown_damage(damage: float, duration: float, source: Node3D) -> void:
+	if _is_dead:
+		return
+	_thrown_damage = maxf(damage, 0.0)
+	_thrown_timer = maxf(duration, 0.0)
+	_thrown_source = source
+	_thrown_hit_ids.clear()
+	_thrown_hit_ids[get_instance_id()] = true
+
+
+func _update_thrown_damage(delta: float) -> void:
+	if _thrown_timer <= 0.0:
+		return
+	_thrown_timer = maxf(_thrown_timer - delta, 0.0)
+	for index in range(get_slide_collision_count()):
+		var other: Node3D = get_slide_collision(index).get_collider() as Node3D
+		if other == null or not other.is_in_group(GROUP_ENEMIES) or _thrown_hit_ids.has(other.get_instance_id()):
+			continue
+		_thrown_hit_ids[other.get_instance_id()] = true
+		if _thrown_source == null or not is_instance_valid(_thrown_source) or not _thrown_source.has_method(&"deliver_hit"):
+			continue
+		var push: Vector3 = Vector3(velocity.x, 0.0, velocity.z)
+		push = push.normalized() if push.length_squared() > 0.01 else -_last_hit_direction
+		_thrown_source.call(&"deliver_hit", &"morningstar", other, {
+			"position": other.global_position + Vector3.UP,
+			"direction": (push + Vector3.UP * 0.3).normalized(),
+			"damage": _thrown_damage,
+			"knockback_multiplier": 1.6,
+		}, 0.06, 0.15)
 
 
 ## True while knocked off balance. The dummy never staggers; melee_enemy.gd overrides this.

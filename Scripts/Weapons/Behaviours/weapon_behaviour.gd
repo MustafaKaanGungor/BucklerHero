@@ -1,7 +1,8 @@
 extends Node3D
 
-## Base for the weapons added after the first four (war hammer, sickle and dagger, morningstar,
-## war axe, hatchets, hook, talons). Attach a script that extends this to a weapon node under
+## Base for behaviour weapons. No live weapon uses it right now; the old ones (war hammer, sickle and
+## dagger, morningstar, war axe, hatchets, hook, talons) are worked examples in OldWeapons/Scripts/
+## (see OldWeapons.md). Attach a script that extends this to a weapon node under
 ## MeleeWeapons (melee_weapons.tscn); the node's transform is still the weapon's idle pose.
 ## melee_weapons.gd registers every child with this script on its own (weapon_id + attack_data),
 ## runs the shared parts (equip, click buffer, windup -> strike -> recover, hit rays, hit-stop,
