@@ -18,6 +18,8 @@ extends Node
 
 signal points_changed(points: float, rank: int)
 signal rank_changed(rank: int, previous_rank: int)
+## The F1 testing cheat was switched on or off.
+signal cheat_toggled(enabled: bool)
 
 const GROUP_PLAYER_MELEE: StringName = &"player_melee"
 const GROUP_PLAYER: StringName = &"player"
@@ -47,8 +49,9 @@ const RANK_LETTERS: Array[String] = ["D", "C", "B", "A", "S"]
 ## Same-weapon hits only add points up to this (just below rank C), so one weapon tops out at D.
 @export var same_weapon_cap: float = 99.0
 
-## Hits from these weapons never score (the crossbow spends the meter; its hits shouldn't refill it).
-@export var unscored_weapons: Array[StringName] = [&"crossbow"]
+## Hits from these weapons never score and don't hold off the drain: the crossbow spends the meter,
+## and the S-rank dagger stream shouldn't keep S going on its own.
+@export var unscored_weapons: Array[StringName] = [&"crossbow", &"thrown_dagger"]
 
 @export_group("Shield Charge")
 ## Points for each enemy crushed against a wall.
@@ -76,6 +79,9 @@ var _current_attack_weapon: StringName = &""
 var _current_attack_is_switch: bool = false
 var _current_attack_hits: int = 0
 var _carried_count: int = 0
+## Testing cheat (F1): keeps the meter full at S (refills after the crossbow spends it, ignores
+## drain and damage). Toggled with InputManager.is_cheat_s_rank_just_pressed().
+var _cheat_s_lock: bool = false
 
 
 func _ready() -> void:
@@ -85,6 +91,13 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_connect_weapons()
+	if InputManager.is_cheat_s_rank_just_pressed():
+		_cheat_s_lock = not _cheat_s_lock
+		cheat_toggled.emit(_cheat_s_lock)
+	if _cheat_s_lock:
+		if _points < max_points:
+			_set_points(max_points)
+		return
 	if _points <= 0.0:
 		return
 	if is_frozen():
@@ -128,6 +141,10 @@ func get_rank_progress() -> float:
 
 
 ## True while a shield charge carries an enemy: the meter doesn't drain.
+func is_cheat_active() -> bool:
+	return _cheat_s_lock
+
+
 func is_frozen() -> bool:
 	return _carried_count > 0
 

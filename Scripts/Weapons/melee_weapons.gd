@@ -16,6 +16,11 @@ extends Node3D
 ## it hits objects inside its hit area: anything that implements on_melee_hit(hit_info),
 ## plus RigidBody3D objects, which get pushed.
 ## Shield only: a quick click is the bash, holding attack braces the shield and starts a charge.
+## Weapons added later (war hammer, sickle and dagger, morningstar, war axe, hatchets, hook, talons)
+## are child nodes with a script extending Scripts/Weapons/Behaviours/weapon_behaviour.gd. They are
+## registered on their own and get hooks for holds, strikes and hits (see that script). How a press
+## is read (attack on press, click or hold, hold only, hold only at S) is their press mode; the shield
+## uses the same click-or-hold path.
 ## The charge movement itself lives in player.gd; this script asks for it, holds the braced pose
 ## and knocks away whatever the shield runs into.
 ## Enemies (anything with start_shield_carry) are not knocked away: the charge picks them up,
@@ -42,6 +47,8 @@ signal empowered_attack_started(weapon_id: StringName)
 signal crossbow_fired(rank: int, is_explosive: bool)
 ## The crossbow was triggered with an empty combo meter and didn't fire.
 signal crossbow_dry_fired
+## A weapon became usable or unusable (a hatchet thrown or picked up).
+signal weapon_availability_changed(weapon_id: StringName, available: bool)
 ## An explosive bolt blew up.
 signal crossbow_explosion(center: Vector3, radius: float, hit_count: int)
 ## The charge slammed into a wall or a heavy enemy and knocked the player back.
@@ -56,6 +63,22 @@ const WEAPON_HALBERD: StringName = &"halberd"
 const WEAPON_SHIELD: StringName = &"shield"
 ## Ranged weapon that spends the combo meter (see the Crossbow exports).
 const WEAPON_CROSSBOW: StringName = &"crossbow"
+## Behaviour weapons (ids come from their nodes; listed here for other scripts to match).
+const WEAPON_WAR_HAMMER: StringName = &"war_hammer"
+const WEAPON_SICKLE_DAGGER: StringName = &"sickle_dagger"
+const WEAPON_MORNINGSTAR: StringName = &"morningstar"
+const WEAPON_WAR_AXE: StringName = &"war_axe"
+const WEAPON_HATCHET: StringName = &"hatchet"
+const WEAPON_RETURNING_HATCHET: StringName = &"returning_hatchet"
+const WEAPON_HOOK: StringName = &"hook"
+const WEAPON_TALONS: StringName = &"talons"
+## Press modes, matching weapon_behaviour.gd's PressMode.
+const PRESS_ON_PRESS: int = 0
+const PRESS_CLICK_OR_HOLD: int = 1
+const PRESS_HOLD_ONLY: int = 2
+const PRESS_HOLD_WHEN_EMPOWERED: int = 3
+const METHOD_GET_PRESS_MODE: StringName = &"get_press_mode"
+const METHOD_IS_DEAD: StringName = &"is_dead"
 
 const METHOD_SET_HOLSTERED: StringName = &"set_holstered"
 const METHOD_ON_MELEE_HIT: StringName = &"on_melee_hit"
@@ -276,8 +299,14 @@ var _pose_rotation: Vector3 = Vector3.ZERO
 var _recover_timers: Dictionary = {}
 var _last_attack_weapon: StringName = WEAPON_NONE
 var _mouse_was_captured: bool = false
-var _shield_press_pending: bool = false
-var _shield_hold_timer: float = 0.0
+var _behaviours: Dictionary = {}
+var _press_pending: bool = false
+var _press_weapon: StringName = WEAPON_NONE
+var _press_timer: float = 0.0
+var _is_hold_active: bool = false
+var _hold_weapon: StringName = WEAPON_NONE
+var _hold_active_time: float = 0.0
+var _previous_weapon: StringName = WEAPON_NONE
 var _is_shield_charge_held: bool = false
 var _shield_charge_hit_timer: float = 0.0
 var _shield_brace_blend: float = 0.0
@@ -309,6 +338,7 @@ func _ready() -> void:
 	_register_weapon(WEAPON_HALBERD, halberd_path, halberd_attack)
 	_register_weapon(WEAPON_SHIELD, shield_path, shield_attack)
 	_register_weapon(WEAPON_CROSSBOW, crossbow_path, crossbow_attack)
+	_register_behaviour_weapons()
 	if not cast_shadows:
 		_disable_shadows(self)
 	equip(starting_weapon)
@@ -330,6 +360,9 @@ func _physics_process(delta: float) -> void:
 	_update_attack(delta)
 	_update_shield_charge(delta)
 	_update_dash_pass_through(delta)
+	_update_hold(delta)
+	for behaviour in _behaviours.values():
+		behaviour.call(&"behaviour_physics_process", delta)
 
 
 func _process(delta: float) -> void:
@@ -375,7 +408,10 @@ func get_attack_progress() -> float:
 
 
 func can_attack() -> bool:
-	if _is_attacking or _is_equipping:
+	if _is_attacking or _is_equipping or _is_hold_active:
+		return false
+	var behaviour: Node = _get_behaviour(_equipped_weapon)
+	if behaviour != null and bool(behaviour.call(&"is_busy")):
 		return false
 	if _get_equipped_attack() == null:
 		return false
@@ -429,11 +465,12 @@ func equip(weapon_id: StringName) -> bool:
 	# Only weapons in the loadout can be taken out.
 	if not weapon_order.is_empty() and not weapon_order.has(weapon_id):
 		return false
+	if not is_weapon_available(weapon_id):
+		return false
 
-	_cancel_attack()
-	_shield_press_pending = false
-	_release_shield_charge()
-	_hide_all_weapons()
+	_put_away_equipped()
+	if _equipped_weapon != WEAPON_NONE:
+		_previous_weapon = _equipped_weapon
 	_equipped_weapon = weapon_id
 	_equip_timer = 0.0
 	_is_equipping = true
@@ -443,8 +480,67 @@ func equip(weapon_id: StringName) -> bool:
 	_apply_weapon_pose()
 	weapon.reset_physics_interpolation()
 	weapon.visible = true
+	var behaviour: Node = _get_behaviour(weapon_id)
+	if behaviour != null:
+		behaviour.call(&"on_equipped")
 	weapon_changed.emit(_equipped_weapon)
 	return true
+
+
+## Puts every weapon away: nothing in hand, no attacks (after throwing the only weapon left).
+func holster_all() -> void:
+	if _equipped_weapon == WEAPON_NONE:
+		return
+	_put_away_equipped()
+	_previous_weapon = _equipped_weapon
+	_equipped_weapon = WEAPON_NONE
+	_is_equipping = false
+	weapon_changed.emit(_equipped_weapon)
+
+
+## Cancels whatever the weapon in hand is doing and hides every weapon.
+func _put_away_equipped() -> void:
+	_cancel_attack()
+	_cancel_press_and_hold()
+	_release_shield_charge()
+	var behaviour: Node = _get_behaviour(_equipped_weapon)
+	if behaviour != null:
+		behaviour.call(&"on_unequipped")
+	_hide_all_weapons()
+
+
+## The weapon that was in hand before the current one (WEAPON_NONE if none).
+func get_previous_weapon() -> StringName:
+	return _previous_weapon
+
+
+## False while a weapon can't be used, for example a thrown hatchet that hasn't been picked up.
+func is_weapon_available(weapon_id: StringName) -> bool:
+	var behaviour: Node = _get_behaviour(weapon_id)
+	return behaviour == null or bool(behaviour.call(&"is_available"))
+
+
+## Takes out the best other weapon: the previous one if it is usable, else the first usable one in the
+## loadout, else nothing. Used after a throw leaves the hand empty.
+func switch_away_from(weapon_id: StringName) -> void:
+	var candidates: Array[StringName] = [_previous_weapon]
+	candidates.append_array(weapon_order)
+	for candidate in candidates:
+		if candidate == weapon_id or candidate == WEAPON_NONE or not _weapons.has(candidate):
+			continue
+		if not weapon_order.is_empty() and not weapon_order.has(candidate):
+			continue
+		if not is_weapon_available(candidate):
+			continue
+		equip(candidate)
+		return
+	if _equipped_weapon == weapon_id:
+		holster_all()
+
+
+## Called by a behaviour when one of its weapons becomes usable or unusable.
+func notify_availability_changed(weapon_id: StringName) -> void:
+	weapon_availability_changed.emit(weapon_id, is_weapon_available(weapon_id))
 
 
 ## Equips the weapon in loadout slot index (0-based) of weapon_order. False if the slot is empty.
@@ -486,9 +582,17 @@ func cycle_weapon(steps: int) -> bool:
 		return false
 	var index: int = weapon_order.find(_equipped_weapon)
 	if index < 0:
-		index = 0
+		index = -1 if steps > 0 else 0
+	var step: int = 1 if steps > 0 else -1
 	var next_index: int = posmod(index + steps, weapon_order.size())
-	return equip(weapon_order[next_index])
+	# Skip weapons that can't be used right now (a thrown hatchet).
+	for _attempt in range(weapon_order.size()):
+		if weapon_order[next_index] == _equipped_weapon:
+			return false
+		if is_weapon_available(weapon_order[next_index]):
+			return equip(weapon_order[next_index])
+		next_index = posmod(next_index + step, weapon_order.size())
+	return false
 
 
 ## Starts the equipped weapon's attack. Returns true if an attack started.
@@ -518,6 +622,10 @@ func attack() -> bool:
 	_attack_next_ray_angle = attack_data.get_half_arc_degrees()
 	# The shield's bash is never empowered; only its charge is.
 	_attack_empowered = is_empowered() and _equipped_weapon != WEAPON_SHIELD
+	# Behaviour weapons whose click has no S-rank version don't count as empowered.
+	var behaviour: Node = _get_behaviour(_equipped_weapon)
+	if behaviour != null and not bool(behaviour.call(&"has_empowered_click")):
+		_attack_empowered = false
 	if _equipped_weapon == WEAPON_CROSSBOW:
 		# The whole meter goes into this shot; the rank it was at sets the damage.
 		_crossbow_rank = ComboMeter.spend_all()
@@ -552,45 +660,121 @@ func _update_attack_input(delta: float) -> void:
 	# head.gd captures the mouse on click; that same click shouldn't also attack.
 	var mouse_captured: bool = Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED
 	if InputManager.is_attack_just_pressed() and _mouse_was_captured and mouse_captured:
-		if _equipped_weapon == WEAPON_SHIELD:
-			# The shield waits to see whether this is a click (bash) or a hold (charge).
-			_shield_press_pending = true
-			_shield_hold_timer = 0.0
-		else:
+		var press_mode: int = _get_press_mode(_equipped_weapon)
+		if press_mode == PRESS_HOLD_WHEN_EMPOWERED and not is_empowered():
+			press_mode = PRESS_ON_PRESS
+		if press_mode == PRESS_ON_PRESS:
 			_attack_buffer_timer = maxf(attack_input_buffer, 0.0)
+		else:
+			# Wait to see whether this is a click or a hold (shield bash / charge, hammer charge, ...).
+			_press_pending = true
+			_press_weapon = _equipped_weapon
+			_press_timer = 0.0
+	# Weapons that repeat while held (sickle and dagger) keep queueing their click attack.
+	if mouse_captured and _mouse_was_captured and InputManager.is_attack_pressed() and not _press_pending and not _is_hold_active:
+		var repeat_behaviour: Node = _get_behaviour(_equipped_weapon)
+		if repeat_behaviour != null and bool(repeat_behaviour.call(&"repeats_while_held")):
+			_attack_buffer_timer = maxf(_attack_buffer_timer, maxf(attack_input_buffer, 0.0))
 	_mouse_was_captured = mouse_captured
 
-	_update_shield_press(delta)
+	_update_press(delta)
 	# The weapon selector only holds back new attacks; one already swinging finishes. The dead don't attack.
 	if _is_weapon_blocked() or _is_weapon_wheel_open() or HealthManager.is_dead():
 		_attack_buffer_timer = 0.0
-		_shield_press_pending = false
+		_cancel_press_and_hold()
 		return
 	if _attack_buffer_timer > 0.0:
 		attack()
 
 
-func _update_shield_press(delta: float) -> void:
-	if not _shield_press_pending:
+## A press that may become a hold: released early it is a click (except hold-only weapons), held past
+## the weapon's hold time it starts the hold move as soon as the weapon is free.
+func _update_press(delta: float) -> void:
+	if not _press_pending:
 		return
-	if _equipped_weapon != WEAPON_SHIELD:
-		_shield_press_pending = false
+	if _equipped_weapon != _press_weapon:
+		_press_pending = false
 		return
+	var press_mode: int = _get_press_mode(_equipped_weapon)
 	if not InputManager.is_attack_pressed():
-		# Let go before the hold time: a normal bash.
-		_shield_press_pending = false
-		_attack_buffer_timer = maxf(attack_input_buffer, 0.0)
+		_press_pending = false
+		# Let go before the hold time: a normal click attack. Hold-only weapons do nothing.
+		if press_mode != PRESS_HOLD_ONLY:
+			_attack_buffer_timer = maxf(attack_input_buffer, 0.0)
 		return
 
-	_shield_hold_timer += delta
-	if _shield_hold_timer < maxf(shield_hold_time, 0.0):
+	_press_timer += delta
+	if _press_timer < _get_hold_time(_equipped_weapon):
 		return
-	# Still held, but busy (equipping or mid-bash): keep waiting and charge as soon as the shield is free.
+	# Still held, but busy (equipping or mid-attack): keep waiting and start as soon as the weapon is free.
 	if not can_attack():
 		return
 
-	_shield_press_pending = false
-	_start_shield_charge()
+	_press_pending = false
+	_start_hold()
+
+
+func _start_hold() -> void:
+	if _equipped_weapon == WEAPON_SHIELD:
+		_start_shield_charge()
+		return
+	var behaviour: Node = _get_behaviour(_equipped_weapon)
+	if behaviour == null or not bool(behaviour.call(&"on_hold_started")):
+		return
+	_is_hold_active = true
+	_hold_weapon = _equipped_weapon
+	_hold_active_time = 0.0
+
+
+## Runs the behaviour's hold move until attack is released, the behaviour ends it, or something
+## interrupts it (switching, the selector, climbing, death).
+func _update_hold(delta: float) -> void:
+	if not _is_hold_active:
+		return
+	var behaviour: Node = _get_behaviour(_hold_weapon)
+	if behaviour == null or _equipped_weapon != _hold_weapon:
+		_cancel_press_and_hold()
+		return
+	if not InputManager.is_attack_pressed():
+		_is_hold_active = false
+		behaviour.call(&"on_hold_released", _hold_active_time)
+		return
+	_hold_active_time += delta
+	if not bool(behaviour.call(&"on_hold_updated", delta, _hold_active_time)):
+		_is_hold_active = false
+
+
+func _cancel_press_and_hold() -> void:
+	_press_pending = false
+	if not _is_hold_active:
+		return
+	_is_hold_active = false
+	var behaviour: Node = _get_behaviour(_hold_weapon)
+	if behaviour != null:
+		behaviour.call(&"on_hold_cancelled")
+
+
+## True while a behaviour weapon's hold move runs (hammer charging, dagger stream, grapple, ...).
+func is_hold_active() -> bool:
+	return _is_hold_active
+
+
+func _get_press_mode(weapon_id: StringName) -> int:
+	if weapon_id == WEAPON_SHIELD:
+		return PRESS_CLICK_OR_HOLD
+	var behaviour: Node = _get_behaviour(weapon_id)
+	if behaviour != null:
+		return int(behaviour.call(METHOD_GET_PRESS_MODE))
+	return PRESS_ON_PRESS
+
+
+func _get_hold_time(weapon_id: StringName) -> float:
+	if weapon_id == WEAPON_SHIELD:
+		return maxf(shield_hold_time, 0.0)
+	var behaviour: Node = _get_behaviour(weapon_id)
+	if behaviour != null:
+		return float(behaviour.call(&"get_hold_time"))
+	return 0.0
 
 
 func _start_shield_charge() -> void:
@@ -926,8 +1110,8 @@ func _update_attack(delta: float) -> void:
 	# The tick that passes strike_end still checks once, so a fast strike can't skip its last hits.
 	if _attack_strike_started and not _attack_strike_finished:
 		var strike_progress: float = attack_data.get_strike_progress(progress)
-		# The crossbow's bolt does its own hitting.
-		if _equipped_weapon != WEAPON_CROSSBOW:
+		# The crossbow's bolt and thrown weapons do their own hitting.
+		if _uses_strike_rays(_equipped_weapon):
 			_update_attack_hits(attack_data, strike_progress)
 		if strike_progress >= 1.0:
 			_attack_strike_finished = true
@@ -952,6 +1136,9 @@ func _start_strike(attack_data: MeleeAttackData) -> void:
 	if _equipped_weapon == WEAPON_CROSSBOW:
 		_fire_crossbow_bolt(_crossbow_rank)
 		return
+	var behaviour: Node = _get_behaviour(_equipped_weapon)
+	if behaviour != null:
+		behaviour.call(&"on_strike_started", attack_data, _attack_empowered)
 
 	if attack_data.dash_distance <= 0.0 or player == null or not player.has_method(METHOD_START_DASH):
 		return
@@ -1083,7 +1270,11 @@ func _cast_hit_ray(
 			continue
 
 		_attack_hit_ids[target_id] = true
-		_apply_hit(attack_data, target, _build_hit_info(attack_data, camera_transform, target, ray_hit))
+		var hit_info: Dictionary = _build_hit_info(attack_data, camera_transform, target, ray_hit)
+		var behaviour: Node = _get_behaviour(_equipped_weapon)
+		if behaviour != null and not _is_casting_charge_hits:
+			hit_info = behaviour.call(&"modify_hit", hit_info, target)
+		_apply_hit(attack_data, target, hit_info)
 
 
 func _build_hit_info(
@@ -1114,8 +1305,10 @@ func _get_damage_multiplier(attack_data: MeleeAttackData) -> float:
 
 
 func _apply_hit(attack_data: MeleeAttackData, target: Node3D, hit_info: Dictionary) -> void:
+	var was_alive: bool = _is_alive(target)
 	if target.has_method(METHOD_ON_MELEE_HIT):
 		target.call(METHOD_ON_MELEE_HIT, hit_info)
+		_notify_hit_landed(_equipped_weapon, target, hit_info, was_alive)
 		if _empowered_dash_timer > 0.0 and not _is_casting_charge_hits:
 			_pass_through(target)
 		if not _is_casting_charge_hits:
@@ -1254,6 +1447,12 @@ func _apply_weapon_pose() -> void:
 		_set_attack_pose(_get_visual_recover_progress())
 	elif _equipped_weapon == WEAPON_SHIELD:
 		_set_shield_brace_pose()
+	var behaviour: Node = _get_behaviour(_equipped_weapon)
+	if behaviour != null:
+		var extra: Array = behaviour.call(&"get_pose_offset")
+		if extra.size() >= 2:
+			_pose_position += Vector3(extra[0])
+			_pose_rotation += Vector3(extra[1])
 
 	var lowered_amount: float = 0.0
 	if _is_equipping:
@@ -1301,6 +1500,44 @@ func _register_weapon(weapon_id: StringName, weapon_path: NodePath, attack_data:
 	_idle_transforms[weapon_id] = weapon.transform
 	_attacks[weapon_id] = attack_data
 	weapon.visible = false
+
+
+## Registers every child weapon that has a behaviour script (weapon_behaviour.gd), in scene order.
+func _register_behaviour_weapons() -> void:
+	for child in get_children():
+		if not child.has_method(METHOD_GET_PRESS_MODE):
+			continue
+		var weapon_id: StringName = StringName(child.get(&"weapon_id"))
+		if weapon_id == &"" or _weapons.has(weapon_id):
+			continue
+		_register_weapon(weapon_id, get_path_to(child), child.get(&"attack_data") as MeleeAttackData)
+		_behaviours[weapon_id] = child
+		child.call(&"setup", self)
+
+
+func _get_behaviour(weapon_id: StringName) -> Node:
+	return _behaviours.get(weapon_id) as Node
+
+
+func _uses_strike_rays(weapon_id: StringName) -> bool:
+	if weapon_id == WEAPON_CROSSBOW:
+		return false
+	var behaviour: Node = _get_behaviour(weapon_id)
+	return behaviour == null or bool(behaviour.call(&"uses_strike_rays"))
+
+
+func _is_alive(target: Node) -> bool:
+	if target == null or not is_instance_valid(target):
+		return false
+	return not (target.has_method(METHOD_IS_DEAD) and bool(target.call(METHOD_IS_DEAD)))
+
+
+func _notify_hit_landed(weapon_id: StringName, target: Node3D, hit_info: Dictionary, was_alive: bool) -> void:
+	var behaviour: Node = _get_behaviour(weapon_id)
+	if behaviour == null:
+		return
+	var killed: bool = was_alive and not _is_alive(target)
+	behaviour.call(&"on_hit_landed", target, hit_info, killed)
 
 
 func _hide_all_weapons() -> void:
@@ -1541,3 +1778,145 @@ func on_crossbow_bolt_explosion(center: Vector3, radius: float, hit_count: int) 
 		_camera.call(METHOD_ADD_SCREEN_SHAKE, crossbow_explosion_screen_shake)
 	LoudnessManger.register_sound(crossbow_explosion_loudness)
 	crossbow_explosion.emit(center, radius, hit_count)
+
+
+# --- Services for behaviour weapons (Scripts/Weapons/Behaviours) ---------------------------------
+
+func get_player() -> CharacterBody3D:
+	return player
+
+
+func get_camera() -> Node3D:
+	return _camera
+
+
+func get_hit_collision_mask() -> int:
+	return hit_collision_mask
+
+
+## The player and carried enemies, for rays that shouldn't hit them.
+func get_excluded_rids() -> Array[RID]:
+	return _get_excluded_rids()
+
+
+## Starts the equipped weapon's attack, as a click would (windup -> strike -> recover).
+func start_attack() -> bool:
+	return attack()
+
+
+## Counts something that isn't a normal attack (dagger stream, hook yank, pounce) as an attack with
+## weapon_id: the combo rule and the combo meter see it, and the swing sound plays.
+func register_custom_attack(weapon_id: StringName) -> void:
+	_register_weapon_use(weapon_id)
+	attack_started.emit(weapon_id)
+
+
+## Sets how long weapon_id can't attack, as if an attack had just started.
+func set_recover(weapon_id: StringName, seconds: float) -> void:
+	_recover_timers[weapon_id] = maxf(seconds, 0.0)
+
+
+## Lands a hit that didn't come from the hit rays (shockwaves, thrown weapons, pounces). Works like a
+## ray hit: the behaviour's modify_hit / on_hit_landed, enemy hit-stop, shake, crate push, loudness
+## and attack_hit (sounds, combo meter). hit_info needs at least direction and damage.
+func deliver_hit(weapon_id: StringName, target: Node3D, hit_info: Dictionary, hit_stop_time: float = 0.0, screen_shake: float = 0.0, impulse: float = 0.0) -> void:
+	if target == null or not is_instance_valid(target):
+		return
+	hit_info["weapon"] = weapon_id
+	hit_info["attacker"] = player
+	hit_info["collider"] = target
+	if not hit_info.has("position"):
+		hit_info["position"] = target.global_position
+	if not hit_info.has("normal"):
+		hit_info["normal"] = Vector3.UP
+	var behaviour: Node = _get_behaviour(weapon_id)
+	if behaviour != null:
+		hit_info = behaviour.call(&"modify_hit", hit_info, target)
+	var was_alive: bool = _is_alive(target)
+	if target.has_method(METHOD_ON_MELEE_HIT):
+		if not was_alive:
+			return
+		target.call(METHOD_ON_MELEE_HIT, hit_info)
+		if hit_stop_time > 0.0 and is_instance_valid(target) and target.has_method(METHOD_APPLY_HIT_STOP):
+			target.call(METHOD_APPLY_HIT_STOP, hit_stop_time)
+		add_screen_shake(screen_shake)
+		_notify_hit_landed(weapon_id, target, hit_info, was_alive)
+	var rigid_body: RigidBody3D = target as RigidBody3D
+	if rigid_body != null and impulse > 0.0:
+		rigid_body.sleeping = false
+		rigid_body.apply_central_impulse(Vector3(hit_info.get("direction", Vector3.ZERO)) * impulse)
+	attack_hit.emit(weapon_id, hit_info)
+
+
+## Replaces the attack data used by weapon_id from its next attack on (sickle and dagger alternate hands).
+func set_attack_data(weapon_id: StringName, data: MeleeAttackData) -> void:
+	if _attacks.has(weapon_id) and data != null:
+		_attacks[weapon_id] = data
+
+
+## Hit callback for projectiles thrown by behaviour weapons (crossbow_bolt.gd with report_method set
+## to this). hit_info["weapon"] says whose it is.
+func on_weapon_projectile_hit(target: Node3D, hit_info: Dictionary, impulse: float) -> void:
+	var weapon_id: StringName = StringName(hit_info.get("weapon", WEAPON_NONE))
+	deliver_hit(weapon_id, target, hit_info, float(hit_info.get("hit_stop", 0.03)), float(hit_info.get("shake", 0.05)), impulse)
+
+
+func add_screen_shake(amount: float) -> void:
+	if amount > 0.0 and _camera != null and _camera.has_method(METHOD_ADD_SCREEN_SHAKE):
+		_camera.call(METHOD_ADD_SCREEN_SHAKE, amount)
+
+
+func add_camera_kick(rotation_degrees_value: Vector3) -> void:
+	if _camera != null and _camera.has_method(METHOD_ADD_RECOIL_IMPULSE):
+		_camera.call(METHOD_ADD_RECOIL_IMPULSE, Vector3.ZERO, _degrees_to_radians(rotation_degrees_value))
+
+
+## Adds a node to the level (projectiles, effects), so it doesn't move with the camera.
+func spawn_in_world(node: Node) -> void:
+	var parent: Node = get_tree().current_scene if get_tree().current_scene != null else get_tree().root
+	parent.add_child(node)
+
+
+## The living enemy closest to the crosshair within max_angle_degrees of it and max_distance metres,
+## with a clear line from the camera to its chest. null if none.
+func find_aimed_enemy(max_angle_degrees: float, max_distance: float, ignore: Array = []) -> Node3D:
+	if _camera == null:
+		return null
+	var camera_transform: Transform3D = _camera.global_transform.orthonormalized()
+	var forward: Vector3 = -camera_transform.basis.z
+	var space: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
+	var best: Node3D = null
+	var best_angle: float = deg_to_rad(maxf(max_angle_degrees, 0.0))
+	for node in get_tree().get_nodes_in_group(&"enemies"):
+		var enemy: Node3D = node as Node3D
+		if enemy == null or ignore.has(enemy) or not _is_alive(enemy):
+			continue
+		var chest: Vector3 = enemy.global_position + Vector3.UP * 1.0
+		var to_enemy: Vector3 = chest - camera_transform.origin
+		var distance: float = to_enemy.length()
+		if distance > max_distance or distance <= 0.01:
+			continue
+		var angle: float = forward.angle_to(to_enemy / distance)
+		if angle > best_angle:
+			continue
+		var query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(camera_transform.origin, chest, hit_collision_mask, _get_excluded_rids())
+		var blocker: Dictionary = space.intersect_ray(query)
+		if not blocker.is_empty() and blocker.get("collider") != enemy and not (blocker.get("collider") as Node).is_in_group(&"enemies"):
+			continue
+		best = enemy
+		best_angle = angle
+	return best
+
+
+## Speed multiplier the weapon in hand puts on the player (the war hammer's charge slows you).
+func get_move_speed_multiplier() -> float:
+	var behaviour: Node = _get_behaviour(_equipped_weapon)
+	if behaviour == null:
+		return 1.0
+	return clampf(float(behaviour.call(&"get_move_speed_multiplier")), 0.0, 1.0)
+
+
+## Every behaviour puts itself back (thrown weapons return). Called on run restart and level change.
+func reset_behaviours() -> void:
+	for behaviour in _behaviours.values():
+		behaviour.call(&"reset_behaviour")

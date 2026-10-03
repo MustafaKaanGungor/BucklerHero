@@ -77,6 +77,72 @@ func _ready() -> void:
 	_add_sound(&"empowered_crossbow", whine, swing_volume_db + 2.0)
 	_add_sound(&"dry_crossbow", SoundSynth.thud(0.07, 900.0, 600.0, 70.0, 0.8, 90.0, 0.95, 87), swing_volume_db - 2.0)
 
+	# War hammer: a heavy low swing (the slam's boom is played by the hammer itself), a deep crunch on
+	# hits and a growl when an S-rank slam sends its quake.
+	_add_sound(&"swing_war_hammer", SoundSynth.whoosh(0.32, 160.0, 700.0, 240.0, 0.5, 2.4, 91), swing_volume_db + 2.0)
+	var crunch_hit: PackedFloat32Array = SoundSynth.thud(0.3, 140.0, 50.0, 12.0, 1.2, 22.0, 0.45, 92)
+	crunch_hit = SoundSynth.mix(crunch_hit, SoundSynth.thud(0.12, 320.0, 150.0, 40.0, 1.4, 50.0, 0.8, 93), 0.5, 0.01)
+	_add_sound(&"hit_war_hammer", crunch_hit, hit_volume_db)
+	_add_sound(&"empowered_war_hammer", SoundSynth.growl(0.7, 50.0, 1.0, 94), swing_volume_db + 3.0)
+
+	# Sickle and dagger: short bright flicks and a light, sharp cut; thrown daggers get a thin zip and
+	# a small tick on hits.
+	_add_sound(&"swing_sickle_dagger", SoundSynth.whoosh(0.14, 1400.0, 3800.0, 2000.0, 0.4, 2.6, 101), swing_volume_db - 1.0)
+	var cut: PackedFloat32Array = SoundSynth.thud(0.1, 420.0, 220.0, 45.0, 1.6, 60.0, 0.9, 102)
+	cut = SoundSynth.mix(cut, SoundSynth.whoosh(0.07, 3000.0, 5200.0, 3600.0, 0.15, 3.2, 103), 0.7)
+	_add_sound(&"hit_sickle_dagger", cut, hit_volume_db - 1.0)
+	_add_sound(&"swing_thrown_dagger", SoundSynth.whoosh(0.1, 2200.0, 5000.0, 3000.0, 0.3, 3.0, 104), swing_volume_db - 4.0)
+	_add_sound(&"hit_thrown_dagger", SoundSynth.thud(0.08, 700.0, 380.0, 60.0, 1.4, 70.0, 0.95, 105), hit_volume_db - 4.0)
+
+	# Morningstar: a long whirring swing, a heavy spiked smack, and a deep rush at S rank.
+	var whirl: PackedFloat32Array = SoundSynth.whoosh(0.45, 220.0, 1100.0, 380.0, 0.55, 2.8, 111)
+	whirl = SoundSynth.mix(whirl, SoundSynth.whoosh(0.3, 300.0, 1400.0, 500.0, 0.5, 2.8, 112), 0.6, 0.12)
+	_add_sound(&"swing_morningstar", whirl, swing_volume_db + 1.0)
+	var smack: PackedFloat32Array = SoundSynth.thud(0.3, 170.0, 60.0, 14.0, 1.5, 24.0, 0.7, 113)
+	smack = SoundSynth.mix(smack, SoundSynth.thud(0.1, 900.0, 500.0, 60.0, 1.2, 80.0, 0.95, 114), 0.4)
+	_add_sound(&"hit_morningstar", smack, hit_volume_db + 1.0)
+	_add_sound(&"empowered_morningstar", SoundSynth.whoosh(0.6, 150.0, 800.0, 260.0, 0.3, 2.0, 115), swing_volume_db + 3.0)
+	# War axe: a heavy chop and a meaty cleave; a bright ring at S rank.
+	_add_sound(&"swing_war_axe", SoundSynth.whoosh(0.28, 400.0, 1700.0, 600.0, 0.45, 2.6, 121), swing_volume_db + 1.0)
+	var cleave: PackedFloat32Array = SoundSynth.thud(0.22, 230.0, 90.0, 20.0, 1.6, 34.0, 0.75, 122)
+	cleave = SoundSynth.mix(cleave, SoundSynth.whoosh(0.08, 2000.0, 3600.0, 2400.0, 0.15, 3.0, 123), 0.6)
+	_add_sound(&"hit_war_axe", cleave, hit_volume_db + 1.0)
+	_add_sound(&"empowered_war_axe", SoundSynth.tone_sweep(0.5, 660.0, 990.0, 0.03, 8.0, 124), swing_volume_db)
+
+	# Hatchets: a spinning throw, a solid chop on hits, a thunk when one lands in the level, a pickup
+	# clink, and a rising lock-on tone for the S-rank homing throw.
+	for hatchet_id in ["hatchet", "returning_hatchet"]:
+		var throw_sound: PackedFloat32Array = SoundSynth.whoosh(0.35, 500.0, 2000.0, 700.0, 0.3, 2.4, 131)
+		throw_sound = SoundSynth.mix(throw_sound, SoundSynth.whoosh(0.2, 800.0, 2400.0, 900.0, 0.5, 2.4, 132), 0.5, 0.12)
+		_add_sound(StringName("swing_%s" % hatchet_id), throw_sound, swing_volume_db + 1.0)
+		var chop: PackedFloat32Array = SoundSynth.thud(0.22, 260.0, 100.0, 22.0, 1.6, 36.0, 0.8, 133)
+		chop = SoundSynth.mix(chop, SoundSynth.whoosh(0.07, 2200.0, 3800.0, 2600.0, 0.15, 3.0, 134), 0.5)
+		_add_sound(StringName("hit_%s" % hatchet_id), chop, hit_volume_db + 1.0)
+		_add_sound(StringName("empowered_%s" % hatchet_id), SoundSynth.tone_sweep(0.35, 700.0, 1400.0, 0.03, 10.0, 135), swing_volume_db)
+	_add_sound(&"land_hatchet", SoundSynth.thud(0.16, 300.0, 140.0, 30.0, 1.2, 40.0, 0.7, 136), hit_volume_db - 4.0)
+	var clink: PackedFloat32Array = SoundSynth.tone_sweep(0.25, 1200.0, 1500.0, 0.01, 0.0, 137)
+	clink = SoundSynth.mix(clink, SoundSynth.thud(0.08, 800.0, 500.0, 60.0, 0.8, 80.0, 0.9, 138), 0.6)
+	_add_sound(&"pickup_hatchet", clink, swing_volume_db - 2.0)
+
+	# Hook: a rattling chain throw, a metal bite on a catch, and a clank when the grapple latches.
+	var chain: PackedFloat32Array = SoundSynth.whoosh(0.3, 900.0, 3000.0, 1400.0, 0.3, 2.0, 141)
+	chain = SoundSynth.mix(chain, SoundSynth.growl(0.3, 160.0, 1.0, 142), 0.25)
+	_add_sound(&"swing_hook", chain, swing_volume_db)
+	var bite: PackedFloat32Array = SoundSynth.thud(0.16, 600.0, 260.0, 40.0, 1.3, 50.0, 0.9, 143)
+	bite = SoundSynth.mix(bite, SoundSynth.tone_sweep(0.2, 1800.0, 1500.0, 0.005, 0.0, 144), 0.3)
+	_add_sound(&"hit_hook", bite, hit_volume_db)
+	var clank: PackedFloat32Array = SoundSynth.thud(0.2, 900.0, 500.0, 35.0, 1.0, 50.0, 0.95, 145)
+	clank = SoundSynth.mix(clank, SoundSynth.tone_sweep(0.3, 2100.0, 1900.0, 0.005, 0.0, 146), 0.35)
+	_add_sound(&"grapple_latch", clank, hit_volume_db - 2.0)
+
+	# Talons: a quick triple scratch, a tearing rip on hits.
+	var scratch: PackedFloat32Array = SoundSynth.whoosh(0.12, 1800.0, 4200.0, 2400.0, 0.4, 2.6, 151)
+	scratch = SoundSynth.mix(scratch, SoundSynth.whoosh(0.1, 2000.0, 4600.0, 2600.0, 0.4, 2.6, 152), 0.6, 0.03)
+	_add_sound(&"swing_talons", scratch, swing_volume_db - 1.0)
+	var rip: PackedFloat32Array = SoundSynth.thud(0.14, 380.0, 180.0, 40.0, 1.8, 50.0, 0.95, 153)
+	rip = SoundSynth.mix(rip, SoundSynth.whoosh(0.1, 2600.0, 5000.0, 3200.0, 0.2, 3.2, 154), 0.7)
+	_add_sound(&"hit_talons", rip, hit_volume_db)
+
 	_weapons.connect(&"attack_started", _on_attack_started)
 	_weapons.connect(&"attack_hit", _on_attack_hit)
 	_weapons.connect(&"shield_charge_started", _on_shield_charge_started)

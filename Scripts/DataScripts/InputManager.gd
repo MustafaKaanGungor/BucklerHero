@@ -25,6 +25,7 @@ const WEAPON_SLOT_ACTIONS: Array[StringName] = [
 ]
 ## Middle mouse: hold to open the weapon selector.
 const ACTION_WEAPON_WHEEL: StringName = &"weapon_wheel"
+const ACTION_CHEAT_S_RANK: StringName = &"cheat_s_rank"
 
 @export_group("Sprint Input")
 ## Enables normal hold-to-sprint using the move_sprint action.
@@ -132,6 +133,11 @@ func get_weapon_slot_just_pressed() -> int:
 		if Input.is_action_just_pressed(WEAPON_SLOT_ACTIONS[index]):
 			return index
 	return -1
+
+
+## Testing cheat (F1): toggles the combo meter's S-rank lock.
+func is_cheat_s_rank_just_pressed() -> bool:
+	return Input.is_action_just_pressed(ACTION_CHEAT_S_RANK)
 
 
 func is_weapon_wheel_pressed() -> bool:

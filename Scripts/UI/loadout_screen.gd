@@ -31,11 +31,25 @@ const SoundSynth = preload("res://Scripts/Audio/sound_synth.gd")
 	&"halberd": ["HALBERD", "Long reach, lunge", "Long thrust with a forward lunge.\n2 damage, pierces a line of enemies.\nS rank: a 10 m lunge through them, double damage."],
 	&"shield": ["SHIELD", "Defence, crowd control", "Blocks hits from the front while held.\nClick: bash. Hold: charge, carry and crush enemies.\nS rank: the charge crushes everything it touches."],
 	&"crossbow": ["CROSSBOW", "Combo spender", "Needs combo to fire; each shot spends all of it.\nDamage by rank: D 2, C 3, B 5, A 8, S 12.\nAt S the bolt explodes: 6 m blast."],
+	&"war_hammer": ["WAR HAMMER", "Heavy breaker", "Hold only: charge while walking, release to slam.\nShockwave launches enemies; full charge staggers brutes.\nIn the air: plunge slam. S rank: a quake line rolls ahead."],
+	&"sickle_dagger": ["SICKLE & DAGGER", "Fast duelist", "Quick alternating cuts, low damage.\nTriple damage on staggered enemies.\nS rank: hold to throw daggers like a machine gun."],
+	&"morningstar": ["MORNINGSTAR", "Crowd scatterer", "Wide flail swing with huge knockback.\nScatters groups and throws enemies around.\nS rank: thrown enemies hurt whoever they crash into."],
+	&"war_axe": ["WAR AXE", "Cleaver", "Heavy diagonal cleave.\nDoes more damage the more hurt an enemy is.\nS rank: more damage, every axe kill heals 10."],
+	&"hatchet": ["HATCHET", "Heavy throw", "Thrown in an arc for high damage.\nWalk over it to pick it up again.\nS rank: homes in on the enemy you aim at."],
+	&"returning_hatchet": ["RETURNING HATCHET", "Throw and recall", "Thrown in an arc, lower damage.\nA kill brings it back; else pick it up.\nS rank: homes in on your target."],
+	&"hook": ["HOOK", "Mobility, control", "Click: yank an enemy to you (heavies pull you in).\nHold: grapple. Zip to walls and ledges,\nhold jump to swing, let go to keep your speed."],
+	&"talons": ["TALONS", "Parkour predator", "Fast rakes, every third hit a heavy rend.\nLonger wall runs, faster climbs, grab any wall.\nHold: pounce. S rank: pounces chain 3 times."],
+}
+
+## A coloured strip at the top of a weapon's card, for weapons that look alike (the two hatchets).
+@export var weapon_colors: Dictionary = {
+	&"hatchet": Color(0.62, 0.62, 0.66),
+	&"returning_hatchet": Color(0.3, 0.6, 1.0),
 }
 
 @export_group("Look")
-## Card size in pixels.
-@export var card_size: Vector2 = Vector2(360.0, 300.0)
+## Card size in pixels. Six fit side by side, so twelve weapons take two rows.
+@export var card_size: Vector2 = Vector2(252.0, 262.0)
 @export var accent_color: Color = Color(1.0, 0.6, 0.2)
 @export var card_color: Color = Color(0.08, 0.08, 0.1, 0.92)
 @export var card_selected_color: Color = Color(0.22, 0.13, 0.06, 0.95)
@@ -165,10 +179,10 @@ func _build() -> void:
 	column.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	column.grow_vertical = Control.GROW_DIRECTION_BOTH
 	column.alignment = BoxContainer.ALIGNMENT_CENTER
-	column.add_theme_constant_override(&"separation", 22)
+	column.add_theme_constant_override(&"separation", 14)
 	add_child(column)
 
-	column.add_child(_make_label("CHOOSE YOUR WEAPONS", 64, accent_color, 12))
+	column.add_child(_make_label("CHOOSE YOUR WEAPONS", 56, accent_color, 12))
 	_hint = _make_label("", 24, Color(0.85, 0.85, 0.85), 6)
 	column.add_child(_hint)
 
@@ -176,8 +190,8 @@ func _build() -> void:
 	_cards_row = HFlowContainer.new()
 	_cards_row.alignment = FlowContainer.ALIGNMENT_CENTER
 	_cards_row.custom_minimum_size = Vector2(1600.0, 0.0)
-	_cards_row.add_theme_constant_override(&"h_separation", 24)
-	_cards_row.add_theme_constant_override(&"v_separation", 24)
+	_cards_row.add_theme_constant_override(&"h_separation", 16)
+	_cards_row.add_theme_constant_override(&"v_separation", 16)
 	column.add_child(_cards_row)
 
 	column.add_child(_make_label("Switching weapons is the combo: each attack with a different weapon resets the others' recovery.", 20, Color(0.7, 0.7, 0.7), 4))
@@ -222,20 +236,28 @@ func _rebuild_cards(all: Array[StringName]) -> void:
 
 		var inside: VBoxContainer = VBoxContainer.new()
 		inside.set_anchors_preset(Control.PRESET_FULL_RECT)
-		inside.offset_left = 18.0
-		inside.offset_top = 16.0
-		inside.offset_right = -18.0
-		inside.offset_bottom = -16.0
-		inside.add_theme_constant_override(&"separation", 8)
+		inside.offset_left = 12.0
+		inside.offset_top = 12.0
+		inside.offset_right = -12.0
+		inside.offset_bottom = -12.0
+		inside.add_theme_constant_override(&"separation", 5)
 		inside.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		card.add_child(inside)
-		inside.add_child(_make_label(String(info[0]), 34, Color.WHITE, 6))
-		inside.add_child(_make_label(String(info[1]), 20, accent_color, 4))
-		var description: Label = _make_label(String(info[2]), 18, Color(0.82, 0.82, 0.82), 3)
+		if weapon_colors.has(weapon_id):
+			var swatch: ColorRect = ColorRect.new()
+			swatch.color = Color(weapon_colors[weapon_id])
+			swatch.custom_minimum_size = Vector2(0.0, 6.0)
+			swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			inside.add_child(swatch)
+		var title: Label = _make_label(String(info[0]), 24, Color.WHITE, 6)
+		title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		inside.add_child(title)
+		inside.add_child(_make_label(String(info[1]), 16, accent_color, 4))
+		var description: Label = _make_label(String(info[2]), 14, Color(0.82, 0.82, 0.82), 3)
 		description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		description.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		inside.add_child(description)
-		var badge: Label = _make_label("", 26, accent_color, 6)
+		var badge: Label = _make_label("", 20, accent_color, 6)
 		inside.add_child(badge)
 
 		_cards_row.add_child(card)

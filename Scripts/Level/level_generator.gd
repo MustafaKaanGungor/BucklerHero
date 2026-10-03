@@ -244,7 +244,15 @@ func restart_run() -> void:
 	LoudnessManger.reset_loudness()
 	TotalLoudnessManager.reset_total_loudness()
 	InputManager.reset_movement_state()
+	_reset_weapon_behaviours()
 	run_restarted.emit()
+
+
+## Thrown weapons lying in the old level come back to the player.
+func _reset_weapon_behaviours() -> void:
+	var weapons: Node = get_tree().get_first_node_in_group(&"player_melee")
+	if weapons != null and weapons.has_method(&"reset_behaviours"):
+		weapons.call(&"reset_behaviours")
 
 
 ## What the death screen shows: level, section label, kills, best combo rank letter, time (s).
@@ -282,6 +290,7 @@ func generate_level() -> void:
 	_build_features()
 	_build_sections()
 	_place_spawn_marker(_layout.get(&"start_cell"), _layout.get(&"start_direction"))
+	_reset_weapon_behaviours()
 	level_generated.emit(level_number, _active_seed)
 
 

@@ -8,6 +8,8 @@ extends Node3D
 ## edge, and is thrown outward; loose props are pushed.
 ## Hits are reported to melee_weapons.on_crossbow_bolt_hit() so sounds, hit-stop and shake match the
 ## other weapons. Created by melee_weapons.gd.
+## Also used for the sickle and dagger's thrown daggers: report_method then points at deliver_hit-style
+## reporting (weapon_id is passed along), stick_in_world off, and a shorter, darker look.
 
 const METHOD_ON_MELEE_HIT: StringName = &"on_melee_hit"
 const METHOD_ON_BOLT_HIT: StringName = &"on_crossbow_bolt_hit"
@@ -39,6 +41,14 @@ var explosion_damage: float = 10.0
 ## Share of explosion_damage at the very edge of the blast.
 var explosion_edge_damage_ratio: float = 0.4
 var explosion_impulse: float = 30.0
+## Method on the weapons node that hits are reported to: (target, hit_info, impulse).
+var report_method: StringName = METHOD_ON_BOLT_HIT
+## False: hitting the level just removes the projectile instead of leaving it stuck there.
+var stick_in_world: bool = true
+## Length of the visible shaft in metres.
+var shaft_length: float = 0.7
+## Weapon id put into hit_info["weapon"] (used with report_method on_weapon_projectile_hit).
+var weapon_id: StringName = &"crossbow"
 
 var velocity: Vector3 = Vector3.ZERO
 var _age: float = 0.0
@@ -101,6 +111,9 @@ func _on_impact(hit: Dictionary) -> void:
 		queue_free()
 		return
 
+	if not stick_in_world:
+		queue_free()
+		return
 	# Stuck in the level for a while, then gone.
 	var tween: Tween = create_tween()
 	tween.tween_interval(maxf(stuck_time, 0.0))
@@ -115,9 +128,10 @@ func _report_hit(target: Node3D, hit_position: Vector3, normal: Vector3, directi
 		"direction": direction,
 		"collider": target,
 		"damage": amount,
+		"weapon": weapon_id,
 	}
-	if _weapons != null and is_instance_valid(_weapons) and _weapons.has_method(METHOD_ON_BOLT_HIT):
-		_weapons.call(METHOD_ON_BOLT_HIT, target, hit_info, physics_impulse)
+	if _weapons != null and is_instance_valid(_weapons) and _weapons.has_method(report_method):
+		_weapons.call(report_method, target, hit_info, physics_impulse)
 
 
 ## Damages and throws every enemy in the radius that isn't sheltered behind level geometry.
@@ -209,7 +223,7 @@ func _build_visual() -> void:
 	material.emission = explosive_color
 	material.emission_energy_multiplier = 3.0
 	var shaft: BoxMesh = BoxMesh.new()
-	shaft.size = Vector3(0.03, 0.03, 0.7)
+	shaft.size = Vector3(0.03, 0.03, shaft_length)
 	shaft.material = material
 	var shaft_instance: MeshInstance3D = MeshInstance3D.new()
 	shaft_instance.mesh = shaft
@@ -219,7 +233,7 @@ func _build_visual() -> void:
 	tip.material = material
 	var tip_instance: MeshInstance3D = MeshInstance3D.new()
 	tip_instance.mesh = tip
-	tip_instance.position = Vector3(0.0, 0.0, -0.38)
+	tip_instance.position = Vector3(0.0, 0.0, -shaft_length * 0.54)
 	add_child(tip_instance)
 	if is_explosive:
 		var light: OmniLight3D = OmniLight3D.new()

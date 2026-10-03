@@ -41,6 +41,14 @@ const GROUP_PLAYER_MELEE: StringName = &"player_melee"
 	&"halberd": "HALBERD",
 	&"shield": "SHIELD",
 	&"crossbow": "CROSSBOW",
+	&"war_hammer": "WAR HAMMER",
+	&"sickle_dagger": "SICKLE & DAGGER",
+	&"morningstar": "MORNINGSTAR",
+	&"war_axe": "WAR AXE",
+	&"hatchet": "HATCHET",
+	&"returning_hatchet": "RETURNING HATCHET",
+	&"hook": "HOOK",
+	&"talons": "TALONS",
 }
 ## Seconds (real time) the ring takes to fade in or out.
 @export var fade_time: float = 0.08
@@ -183,7 +191,12 @@ func _draw() -> void:
 		var label_position: Vector2 = centre + Vector2.from_angle(middle_angle) * (inner_radius + outer_radius) * 0.5
 		var label: String = String(weapon_names.get(order[index], String(order[index]).to_upper()))
 		var recovering: bool = weapons != null and bool(weapons.call(&"is_recovering", order[index]))
+		# A thrown hatchet can't be picked here until it is collected.
+		var available: bool = weapons == null or bool(weapons.call(&"is_weapon_available", order[index]))
 		var text_color: Color = Color(1.0, 1.0, 1.0, 0.45 if recovering else 1.0)
+		if not available:
+			text_color = Color(1.0, 1.0, 1.0, 0.2)
+			label += " (THROWN)"
 		var text_size: Vector2 = font.get_string_size(label, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size)
 		draw_string_outline(font, label_position + Vector2(-text_size.x * 0.5, font_size * 0.35), label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, 6, Color(0, 0, 0, 0.8))
 		draw_string(font, label_position + Vector2(-text_size.x * 0.5, font_size * 0.35), label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, text_color)

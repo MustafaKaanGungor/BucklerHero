@@ -146,6 +146,8 @@ func _process(delta: float) -> void:
 		_weapons = get_tree().get_first_node_in_group(&"player_melee")
 		if _weapons != null and _weapons.has_signal(&"crossbow_dry_fired"):
 			_weapons.connect(&"crossbow_dry_fired", show_message.bind("NEED COMBO"))
+	if not ComboMeter.cheat_toggled.is_connected(_on_cheat_toggled):
+		ComboMeter.cheat_toggled.connect(_on_cheat_toggled)
 	if _message.is_inside_tree():
 		_message.size = Vector2(size.x, 40.0)
 		_message.global_position = global_position + Vector2(0.0, size.y * 0.35)
@@ -218,3 +220,7 @@ func _build_s_rank_sound() -> AudioStreamWAV:
 		var tone: PackedFloat32Array = SoundSynth.tone_sweep(1.1, float(note[0]) * 0.97, float(note[0]), 0.15, 6.0, 313 + int(note[0]))
 		sound = SoundSynth.mix(sound, tone, 0.3, 0.35 + float(note[1]))
 	return SoundSynth.make_wav(SoundSynth.normalize(sound))
+
+
+func _on_cheat_toggled(enabled: bool) -> void:
+	show_message("CHEAT: S RANK LOCKED" if enabled else "CHEAT OFF")
